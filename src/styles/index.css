@@ -1,0 +1,84 @@
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;0,900;1,400;1,600&family=Inter:wght@300;400;500;600;700&display=swap');
+
+* { box-sizing: border-box; }
+
+body {
+  font-family: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  background: #F0EBE1;
+  color: #1A1612;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.font-serif { font-family: 'Playfair Display', ui-serif, Georgia, serif; }
+
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #D4CCBF; border-radius: 3px; }
+
+/* Small utility classes used by the React primitives. The rest of the UI uses component-local styles. */
+.flex { display: flex; }
+.inline-flex { display: inline-flex; }
+.items-center { align-items: center; }
+.gap-1 { gap: 0.25rem; }
+.gap-2 { gap: 0.5rem; }
+.mb-4 { margin-bottom: 1rem; }
+
+
+/* App shell / scrolling
+ * The browser is the single vertical scroll container. The sidebar and top bar
+ * stay in view with native sticky positioning instead of nested scroll areas.
+ */
+html,
+body,
+#root {
+  margin: 0;
+  min-height: 100%;
+}
+
+body {
+  overflow-x: hidden;
+}
+
+.app-shell {
+  min-height: 100vh;
+  display: flex;
+  align-items: stretch;
+  width: 100%;
+}
+
+.app-sidebar {
+  width: 210px;
+  flex: 0 0 210px;
+  min-height: 100vh;
+  height: 100vh;
+  position: sticky;
+  top: 0;
+  align-self: flex-start;
+  display: flex;
+  flex-direction: column;
+  z-index: 60;
+}
+
+.app-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 100vh;
+}
+
+.app-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+}
+
+.app-page-content {
+  min-height: calc(100vh - 44px);
+}
+
+@media (max-width: 800px) {
+  .app-sidebar {
+    width: 190px;
+    flex-basis: 190px;
+  }
+}
