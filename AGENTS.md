@@ -33,17 +33,22 @@ email-extract-compare/
 ├── api/                            # FastAPI backend application
 │   ├── __init__.py                 # Exports FastAPI app
 │   ├── main.py                     # App factory, CORS middleware, routes
+│   ├── db.py                       # SQLite engine, init_db(), get_session()
+│   ├── models.py                   # SQLModel models: EmailRecord, ComparisonRecord
 │   ├── schemas.py                  # Pydantic models matching frontend TypeScript contracts
 │   ├── adapter.py                  # Adapts core domain models to frontend schemas
 │   └── routes/
+│       ├── emails.py               # GET /api/emails & POST /api/emails/batch (cache)
 │       ├── classify.py             # POST /api/classify
 │       ├── compare.py              # POST /api/compare & POST /api/compare/text
+│       ├── comparisons.py         # GET /api/comparisons & PATCH /review
 │       └── health.py               # GET /api/health
 │
 ├── tests/                          # Automated test suite
 │   ├── __init__.py
 │   ├── test_pipeline.py            # Unit tests for core engine (classifier, comparator, pipeline)
-│   └── test_api.py                 # Integration tests for FastAPI endpoints
+│   ├── test_api.py                 # Integration tests for FastAPI endpoints
+│   └── test_db.py                  # Tests for SQLite persistence, caching, and serialization
 │
 ├── classifier.py                   # Root shim -> core.classifier
 ├── compare_ai.py                   # Root shim -> core.compare_ai

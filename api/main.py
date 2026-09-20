@@ -16,14 +16,16 @@ if str(repo_root) not in sys.path:
 
 load_dotenv()
 
-from api.routes import classify, compare, health
+from api.db import init_db
+from api.routes import classify, compare, health, emails, comparisons
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup logging/initialization
+    # Startup: initialize database tables
+    init_db()
     yield
-    # Shutdown cleanup
+    # Shutdown cleanup if any
 
 
 app = FastAPI(
@@ -47,11 +49,15 @@ app.add_middleware(
 # Register routers under /api namespace
 app.include_router(classify.router, prefix="/api")
 app.include_router(compare.router, prefix="/api")
+app.include_router(emails.router, prefix="/api")
+app.include_router(comparisons.router, prefix="/api")
 app.include_router(health.router, prefix="/api")
 
 # Also alias without /api prefix for convenience
 app.include_router(classify.router)
 app.include_router(compare.router)
+app.include_router(emails.router)
+app.include_router(comparisons.router)
 app.include_router(health.router)
 
 
@@ -63,9 +69,11 @@ async def root():
         "docs": "/docs",
         "health": "/api/health",
         "endpoints": {
+            "emails_list": "GET /api/emails",
+            "emails_batch_sync": "POST /api/emails/batch",
             "classify": "POST /api/classify",
             "compare_files": "POST /api/compare",
             "compare_text": "POST /api/compare/text",
+            "comparisons_list": "GET /api/comparisons",
         },
     }
-

@@ -8,15 +8,35 @@ repo_root = Path(__file__).resolve().parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
+from sqlalchemy.pool import StaticPool
+from sqlmodel import SQLModel, create_engine, Session
 from fastapi.testclient import TestClient
+from api.db import get_session
 from api.main import app
 from core.classifier import ClassificationResult
 from core.compare_ai import ComparisonResult, FieldComparison
 
 
 class TestFastAPIEndpoints(unittest.TestCase):
-    def setUp(self):
-        self.client = TestClient(app)
+    @classmethod
+    def setUpClass(cls):
+        cls.test_engine = create_engine(
+            "sqlite://",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        SQLModel.metadata.create_all(cls.test_engine)
+
+        def override_get_session():
+            with Session(cls.test_engine) as session:
+                yield session
+
+        app.dependency_overrides[get_session] = override_get_session
+        cls.client = TestClient(app)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.dependency_overrides.clear()
 
     def test_root_endpoint(self):
         response = self.client.get("/")

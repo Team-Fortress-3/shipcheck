@@ -1,6 +1,7 @@
 """
 Pydantic schemas directly matching the ShipCheck React frontend TypeScript contracts.
 """
+from datetime import datetime
 from typing import List, Optional, Literal, Dict, Any
 from pydantic import BaseModel, Field
 
@@ -16,6 +17,7 @@ EmailStatus = Literal[
 
 class EmailClassifyRequest(BaseModel):
     """Payload sent by the frontend to classify an email."""
+    id: Optional[str] = Field(default=None, description="Optional Gmail message ID to persist classification")
     subject: str = Field(..., description="Email subject line")
     snippet: str = Field(default="", description="Short preview snippet of email")
     body: str = Field(default="", description="Full or partial email body")
@@ -41,12 +43,51 @@ class CompareResponse(BaseModel):
     status: EmailStatus  # "Match", "Mismatch", or "Needs Review"
     fields: List[ComparisonField]
     summary: Optional[str] = None
+    comparison_id: Optional[int] = Field(default=None, description="ID of persisted ComparisonRecord")
 
 
 class CompareTextRequest(BaseModel):
     """Direct text-based comparison payload."""
     si_text: str = Field(..., description="Raw text of Shipping Instruction")
     bl_text: str = Field(..., description="Raw text of Bill of Lading")
+    email_id: Optional[str] = Field(default=None, description="Optional linked Gmail email ID")
+
+
+class EmailRecordCreate(BaseModel):
+    """Client payload representing an email fetched from Gmail."""
+    id: str = Field(..., description="Gmail message ID")
+    thread_id: str
+    from_name: str
+    from_email: str
+    subject: str
+    snippet: str
+    date_str: str
+    timestamp: int
+    has_attachments: bool = False
+    body: Optional[str] = None
+    body_snippet: Optional[str] = None
+    email_type: Optional[EmailType] = None
+    status: Optional[EmailStatus] = None
+
+
+class ComparisonRecordRead(BaseModel):
+    """Read model for saved comparison history."""
+    id: int
+    email_id: Optional[str] = None
+    si_name: str
+    bl_name: str
+    status: str
+    summary: Optional[str] = None
+    fields: List[ComparisonField]
+    reviewed: bool = False
+    reviewed_by: Optional[str] = None
+    created_at: datetime
+
+
+class ComparisonReviewUpdate(BaseModel):
+    """Payload to mark a comparison as reviewed."""
+    reviewed: bool = True
+    reviewed_by: Optional[str] = None
 
 
 class HealthResponse(BaseModel):
@@ -54,4 +95,3 @@ class HealthResponse(BaseModel):
     status: str
     version: str
     providers: Dict[str, bool]
-
