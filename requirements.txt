@@ -1,3 +1,4 @@
 anthropic
 python-dotenv==1.2.3
 openrouter==1.2.2
+openpyxl
