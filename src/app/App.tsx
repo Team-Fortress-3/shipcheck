@@ -1,11 +1,16 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useGoogleLogin } from '@react-oauth/google'
+import {
+  classifyEmailsBatch,
+  compareFilesApi,
+  type EmailType,
+  type EmailStatus,
+  type ComparisonField,
+} from '../services/api'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type Page = 'dashboard' | 'inbox' | 'email-detail' | 'processing' | 'comparison' | 'review' | 'review-detail' | 'reports' | 'upload' | 'upload-comparison'
-type EmailType = 'Document Comparison' | 'New SI Request' | 'Invoice Query' | 'General' | 'Spam'
-type EmailStatus = 'New' | 'Mismatch' | 'Match' | 'Needs Review' | 'Classified' | 'Processing'
 
 interface GmailEmail {
   id: string
@@ -22,20 +27,47 @@ interface GmailEmail {
   body?: string
 }
 
-interface ComparisonField { field: string; si: string; bl: string; match: boolean }
 interface UserInfo { email: string; name: string; picture?: string }
+
 
 // ─── Gmail API ────────────────────────────────────────────────────────────────
 
-async function gmailFetch(token: string, path: string) {
-  const r = await fetch(`https://gmail.googleapis.com/gmail/v1/${path}`, {
-    headers: { Authorization: `Bearer ${token}` },
-  })
-  if (!r.ok) throw new Error(`Gmail API ${r.status}`)
-  return r.json()
+async function delay(ms: number) {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+async function gmailFetch(token: string, path: string, retries = 3, backoff = 800): Promise<any> {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const r = await fetch(`https://gmail.googleapis.com/gmail/v1/${path}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    if (r.ok) return r.json()
+    if (r.status === 429 && attempt < retries) {
+      // Exponential backoff with jitter on 429 rate limit
+      const wait = backoff * Math.pow(2, attempt) + Math.random() * 300
+      await delay(wait)
+      continue
+    }
+    throw new Error(`Gmail API ${r.status}`)
+  }
+}
+
+async function fetchInBatches<T, R>(items: T[], fn: (item: T) => Promise<R>, concurrency = 5): Promise<R[]> {
+  const results: R[] = new Array(items.length)
+  let index = 0
+  async function worker() {
+    while (index < items.length) {
+      const i = index++
+      results[i] = await fn(items[i])
+    }
+  }
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, () => worker())
+  await Promise.all(workers)
+  return results
 }
 
 async function getUserInfo(token: string): Promise<UserInfo> {
+
   const r = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
     headers: { Authorization: `Bearer ${token}` },
   })
@@ -97,10 +129,16 @@ function parseFrom(from: string) {
   return m ? { name: m[1].replace(/"/g, '').trim() || m[2], email: m[2] } : { name: from, email: from }
 }
 
-async function fetchEmails(token: string): Promise<GmailEmail[]> {
-  const list = await gmailFetch(token, 'users/me/messages?maxResults=100&q=in:inbox')
+interface GmailPageResult {
+  emails: GmailEmail[]
+  nextPageToken?: string
+}
+
+async function fetchEmailsPage(token: string, pageToken?: string, maxResults = 25): Promise<GmailPageResult> {
+  const pageParam = pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ''
+  const list = await gmailFetch(token, `users/me/messages?maxResults=${maxResults}&q=in:inbox${pageParam}`)
   const ids: string[] = (list.messages || []).map((m: any) => m.id)
-  const emails = await Promise.all(ids.map(async id => {
+  const emails = await fetchInBatches(ids, async id => {
     const msg = await gmailFetch(token, `users/me/messages/${id}?format=full`)
     const headers = msg.payload?.headers || []
     const subject = parseHeader(headers, 'subject') || '(no subject)'
@@ -111,10 +149,25 @@ async function fetchEmails(token: string): Promise<GmailEmail[]> {
     const snippet = msg.snippet || ''
     const body = extractBody(msg.payload)
     const hasAttachments = !!(msg.payload?.parts?.some((p: any) => p.filename?.length > 0))
-    const type = classify(subject, snippet, body)
-    return { id, threadId: msg.threadId, from: fromEmail, fromName, subject, snippet, date: fmtDate(timestamp), timestamp, type, status: mockStatus(type, id), hasAttachments, body: body.slice(0, 2000) } as GmailEmail
-  }))
-  return emails.sort((a, b) => b.timestamp - a.timestamp)
+    return {
+      id,
+      threadId: msg.threadId,
+      from: fromEmail,
+      fromName,
+      subject,
+      snippet,
+      date: fmtDate(timestamp),
+      timestamp,
+      type: 'General',
+      status: 'Processing',
+      hasAttachments,
+      body: body.slice(0, 2000),
+    } as GmailEmail
+  }, 5)
+  return {
+    emails: emails.sort((a, b) => b.timestamp - a.timestamp),
+    nextPageToken: list.nextPageToken,
+  }
 }
 
 // ─── Mock data ────────────────────────────────────────────────────────────────
@@ -283,7 +336,17 @@ function Sidebar({ page, onNav, user, emails }: { page: Page; onNav: (p: Page) =
 
 // ─── TopBar ───────────────────────────────────────────────────────────────────
 
-function TopBar({ crumb, onRefresh, loading }: { crumb: string; onRefresh?: () => void; loading?: boolean }) {
+function TopBar({
+  crumb,
+  onRefresh,
+  loading,
+  classifying,
+}: {
+  crumb: string
+  onRefresh?: () => void
+  loading?: boolean
+  classifying?: { active: boolean; current: number; total: number; error: string | null }
+}) {
   const now = new Date()
   const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
   const dateStr = now.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' }).toUpperCase()
@@ -295,9 +358,20 @@ function TopBar({ crumb, onRefresh, loading }: { crumb: string; onRefresh?: () =
       <div style={{ fontSize: 11, letterSpacing: '0.1em', textTransform: 'uppercase', color: muted, fontWeight: 500 }}>
         — {crumb}
       </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+        {classifying?.active && (
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 600, color: '#1E40AF', background: '#EFF6FF', border: '1px solid #BFDBFE', padding: '3px 9px', borderRadius: 4 }}>
+            <span style={{ width: 8, height: 8, borderRadius: '50%', border: '2px solid #2563EB', borderTopColor: 'transparent', animation: 'spin 0.7s linear infinite', display: 'inline-block' }} />
+            AI CLASSIFYING ({classifying.current}/{classifying.total})
+          </div>
+        )}
+        {classifying?.error && (
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 600, color: '#991B1B', background: '#FEF2F2', border: '1px solid #FECACA', padding: '3px 8px', borderRadius: 4 }}>
+            <span>⚠</span> AI BACKEND ERROR
+          </div>
+        )}
         {onRefresh && (
-          <button onClick={onRefresh} disabled={loading} style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color: navy, border: `1px solid ${border}`, borderRadius: 4, padding: '4px 12px', background: 'none', cursor: 'pointer', opacity: loading ? 0.5 : 1 }}>
+          <button onClick={onRefresh} disabled={loading || classifying?.active} style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color: navy, border: `1px solid ${border}`, borderRadius: 4, padding: '4px 12px', background: 'none', cursor: 'pointer', opacity: loading || classifying?.active ? 0.5 : 1 }}>
             {loading ? 'Loading…' : '↺ Refresh'}
           </button>
         )}
@@ -639,7 +713,27 @@ function FilterDropdown({ filters, onChange }: { filters: InboxFilters; onChange
   )
 }
 
-function InboxPage({ emails, onSelect }: { emails: GmailEmail[]; onSelect: (id: string) => void }) {
+function InboxPage({
+  emails,
+  onSelect,
+  classifying,
+  onClassify,
+  apiError,
+  onClearError,
+  hasMore,
+  onLoadMore,
+  loadingMore,
+}: {
+  emails: GmailEmail[]
+  onSelect: (id: string) => void
+  classifying?: { active: boolean; current: number; total: number; error: string | null }
+  onClassify?: () => void
+  apiError?: string | null
+  onClearError?: () => void
+  hasMore?: boolean
+  onLoadMore?: () => void
+  loadingMore?: boolean
+}) {
   const [search, setSearch] = useState('')
   const [filters, setFilters] = useState<InboxFilters>(DEFAULT_FILTERS)
 
@@ -656,10 +750,42 @@ function InboxPage({ emails, onSelect }: { emails: GmailEmail[]; onSelect: (id: 
     .sort((a, b) => filters.dateSort === 'recent' ? b.timestamp - a.timestamp : a.timestamp - b.timestamp)
 
   const showGrouped = !isFiltered
+  const progressPercent = classifying?.total ? Math.round((classifying.current / classifying.total) * 100) : 0
 
   return (
     <div style={{ padding: 28 }}>
       <SectionLabel>Email Inbox</SectionLabel>
+
+      {/* Active AI Classification Progress Banner */}
+      {classifying?.active && (
+        <div style={{ background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 4, padding: '14px 20px', marginBottom: 20 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 12, fontWeight: 600, color: '#1E40AF' }}>
+              <span style={{ width: 14, height: 14, borderRadius: '50%', border: '2px solid #2563EB', borderTopColor: 'transparent', animation: 'spin 0.7s linear infinite', display: 'inline-block' }} />
+              AI CLASSIFICATION IN PROGRESS: Analyzing emails with Claude Haiku ({classifying.current} of {classifying.total} completed)…
+            </div>
+            <span style={{ fontSize: 11, fontWeight: 700, color: '#2563EB' }}>
+              {progressPercent}%
+            </span>
+          </div>
+          <div style={{ width: '100%', height: 4, background: '#DBEAFE', borderRadius: 2, overflow: 'hidden' }}>
+            <div style={{ width: `${progressPercent}%`, height: '100%', background: '#2563EB', transition: 'width 0.3s ease' }} />
+          </div>
+        </div>
+      )}
+
+      {/* Explicit Backend Error Banner (No Silent Fallback) */}
+      {(classifying?.error || apiError) && (
+        <div style={{ background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 4, padding: '12px 18px', marginBottom: 20, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#991B1B', fontWeight: 500 }}>
+            <span style={{ fontSize: 14 }}>⚠</span>
+            <span><strong>AI Backend Error:</strong> {classifying?.error || apiError}</span>
+          </div>
+          {onClearError && (
+            <button onClick={onClearError} style={{ background: 'none', border: 'none', color: '#991B1B', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>✕ Dismiss</button>
+          )}
+        </div>
+      )}
 
       {/* Controls */}
       <div style={{ display: 'flex', gap: 10, marginBottom: 24, alignItems: 'center' }}>
@@ -675,6 +801,30 @@ function InboxPage({ emails, onSelect }: { emails: GmailEmail[]; onSelect: (id: 
           />
         </div>
         <FilterDropdown filters={filters} onChange={setFilters} />
+        {onClassify && (
+          <button
+            onClick={onClassify}
+            disabled={classifying?.active}
+            style={{
+              fontSize: 11,
+              fontWeight: 600,
+              letterSpacing: '0.06em',
+              textTransform: 'uppercase',
+              background: classifying?.active ? borderLight : navy,
+              color: white,
+              border: 'none',
+              borderRadius: 4,
+              padding: '8px 14px',
+              cursor: classifying?.active ? 'not-allowed' : 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+              opacity: classifying?.active ? 0.6 : 1,
+            }}
+          >
+            {classifying?.active ? 'Classifying…' : '⚡ Classify with AI'}
+          </button>
+        )}
         {isFiltered && (
           <button
             onClick={() => { setSearch(''); setFilters(DEFAULT_FILTERS) }}
@@ -703,6 +853,34 @@ function InboxPage({ emails, onSelect }: { emails: GmailEmail[]; onSelect: (id: 
         </div>
       ) : (
         <EmailTable rows={processed} onSelect={onSelect} />
+      )}
+
+      {hasMore && (
+        <div style={{ marginTop: 28, textAlign: 'center' }}>
+          <button
+            onClick={onLoadMore}
+            disabled={loadingMore}
+            style={{
+              padding: '10px 24px',
+              fontSize: 12,
+              fontWeight: 600,
+              letterSpacing: '0.06em',
+              textTransform: 'uppercase',
+              color: navy,
+              background: white,
+              border: `1px solid ${border}`,
+              borderRadius: 4,
+              cursor: loadingMore ? 'not-allowed' : 'pointer',
+              opacity: loadingMore ? 0.6 : 1,
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 8,
+            }}
+          >
+            {loadingMore && <span style={{ width: 12, height: 12, borderRadius: '50%', border: `2px solid ${navy}`, borderTopColor: 'transparent', animation: 'spin 0.7s linear infinite', display: 'inline-block' }} />}
+            {loadingMore ? 'Loading more emails…' : 'Load More Emails (25)'}
+          </button>
+        </div>
       )}
     </div>
   )
@@ -1074,6 +1252,7 @@ function UploadPage({ onCompare }: { onCompare: (result: ComparisonField[], siNa
   const [si, setSi] = useState<UploadedDoc | null>(null)
   const [bl, setBl] = useState<UploadedDoc | null>(null)
   const [parsing, setParsing] = useState(false)
+  const [comparing, setComparing] = useState(false)
   const [error, setError] = useState('')
 
   async function handleDrop(type: 'si' | 'bl', file: File) {
@@ -1090,16 +1269,25 @@ function UploadPage({ onCompare }: { onCompare: (result: ComparisonField[], siNa
     }
   }
 
-  function handleCompare() {
+  async function handleCompare() {
     if (!si || !bl) return
-    onCompare(compareDocuments(si.text, bl.text), si.file.name, bl.file.name)
+    setComparing(true)
+    setError('')
+    try {
+      const res = await compareFilesApi(si.file, bl.file)
+      onCompare(res.fields, si.file.name, bl.file.name)
+    } catch (err: any) {
+      setError(`AI Backend Comparison Failed: ${err.message || String(err)}. Please verify the FastAPI service is running at http://localhost:8000.`)
+    } finally {
+      setComparing(false)
+    }
   }
 
   return (
     <div style={{ padding: 28 }}>
       <SectionLabel>Upload & Compare Documents</SectionLabel>
       <h2 style={{ fontFamily: 'Playfair Display, serif', fontSize: 26, fontWeight: 700, color: ink, margin: '0 0 6px' }}>SI vs Bill of Lading</h2>
-      <p style={{ fontSize: 13, color: muted, marginBottom: 28 }}>Upload both documents as PDFs. ShipCheck will extract and compare 7 key fields client-side — nothing is uploaded to any server.</p>
+      <p style={{ fontSize: 13, color: muted, marginBottom: 28 }}>Upload both documents as PDFs. ShipCheck sends them to the FastAPI AI service to extract and compare the 7 shipping fields using Claude & Vision models.</p>
 
       {parsing && (
         <div style={{ border: `1px solid ${border}`, borderRadius: 4, background: white, padding: '14px 20px', marginBottom: 20, display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -1107,8 +1295,14 @@ function UploadPage({ onCompare }: { onCompare: (result: ComparisonField[], siNa
           <span style={{ fontSize: 13, color: muted }}>Parsing PDF…</span>
         </div>
       )}
+      {comparing && (
+        <div style={{ border: `1px solid #BFDBFE`, borderRadius: 4, background: '#EFF6FF', padding: '14px 20px', marginBottom: 20, display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span style={{ width: 16, height: 16, borderRadius: '50%', border: `2px solid #2563EB`, borderTopColor: 'transparent', animation: 'spin 0.7s linear infinite', display: 'inline-block' }} />
+          <span style={{ fontSize: 13, color: '#1E40AF', fontWeight: 600 }}>Comparing documents with AI backend (extracting & verifying 7 shipment fields)…</span>
+        </div>
+      )}
       {error && (
-        <div style={{ border: `1px solid ${amberBdr}`, borderRadius: 4, background: amberBg, padding: '12px 16px', marginBottom: 20, fontSize: 13, color: '#92400E' }}>⚠ {error}</div>
+        <div style={{ border: `1px solid #FECACA`, borderRadius: 4, background: '#FEF2F2', padding: '12px 16px', marginBottom: 20, fontSize: 13, color: '#991B1B' }}>⚠ {error}</div>
       )}
 
       <div style={{ display: 'flex', gap: 16, marginBottom: 24 }}>
@@ -1117,11 +1311,11 @@ function UploadPage({ onCompare }: { onCompare: (result: ComparisonField[], siNa
       </div>
 
       <button
-        disabled={!si || !bl || parsing}
+        disabled={!si || !bl || parsing || comparing}
         onClick={handleCompare}
-        style={{ fontSize: 13, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', padding: '13px 32px', background: si && bl && !parsing ? navy : border, color: white, border: 'none', borderRadius: 4, cursor: si && bl && !parsing ? 'pointer' : 'not-allowed', opacity: si && bl && !parsing ? 1 : 0.7 }}
+        style={{ fontSize: 13, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', padding: '13px 32px', background: si && bl && !parsing && !comparing ? navy : border, color: white, border: 'none', borderRadius: 4, cursor: si && bl && !parsing && !comparing ? 'pointer' : 'not-allowed', opacity: si && bl && !parsing && !comparing ? 1 : 0.7 }}
       >
-        Compare Documents →
+        {comparing ? 'Comparing with AI…' : 'Compare Documents →'}
       </button>
 
       <div style={{ marginTop: 32, border: `1px solid ${borderLight}`, borderRadius: 4, background: surface, padding: '16px 20px' }}>
@@ -1335,17 +1529,86 @@ export default function App() {
   const [user, setUser] = useState<UserInfo | null>(null)
   const [emails, setEmails] = useState<GmailEmail[]>([])
   const [loading, setLoading] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [nextPageToken, setNextPageToken] = useState<string | null>(null)
   const [page, setPage] = useState<Page>('dashboard')
   const [selectedEmailId, setSelectedEmailId] = useState('')
   const [selectedReviewId, setSelectedReviewId] = useState('')
   const [uploadResult, setUploadResult] = useState<{ fields: ComparisonField[]; siName: string; blName: string } | null>(null)
+  const [classifying, setClassifying] = useState<{ active: boolean; current: number; total: number; error: string | null }>({
+    active: false,
+    current: 0,
+    total: 0,
+    error: null,
+  })
+  const [apiError, setApiError] = useState<string | null>(null)
+
+  const runAiClassification = useCallback(async (targets: GmailEmail[]) => {
+    if (!targets.length) return
+    setClassifying({ active: true, current: 0, total: targets.length, error: null })
+    setApiError(null)
+
+    await classifyEmailsBatch(
+      targets,
+      (_index, result, item) => {
+        setClassifying(prev => ({ ...prev, current: prev.current + 1 }))
+        setEmails(prev => prev.map(e => {
+          if (e.id === item.id) {
+            return {
+              ...e,
+              type: result.type,
+              status: result.type === 'Document Comparison' ? (e.status === 'Processing' ? 'Needs Review' : e.status) : 'Classified',
+            }
+          }
+          return e
+        }))
+      },
+      (_index, error, item) => {
+        console.error(`Classification failed for email ${item.id}:`, error)
+        const msg = `Failed to classify "${item.subject.slice(0, 32)}…": ${error.message}`
+        setClassifying(prev => ({
+          ...prev,
+          current: prev.current + 1,
+          error: msg,
+        }))
+        setApiError(msg)
+      },
+      2
+    )
+
+    setClassifying(prev => ({ ...prev, active: false }))
+  }, [])
 
   const loadEmails = useCallback(async (t: string) => {
     setLoading(true)
-    try { setEmails(await fetchEmails(t)) }
-    catch { setEmails(MOCK) }
-    finally { setLoading(false) }
-  }, [])
+    setApiError(null)
+    try {
+      const res = await fetchEmailsPage(t, undefined, 25)
+      setEmails(res.emails)
+      setNextPageToken(res.nextPageToken || null)
+      setLoading(false)
+      await runAiClassification(res.emails)
+    } catch (err: any) {
+      setLoading(false)
+      setApiError(`Failed to fetch emails: ${err.message || String(err)}`)
+    }
+  }, [runAiClassification])
+
+  const loadMoreEmails = useCallback(async () => {
+    if (!token || !nextPageToken || loadingMore) return
+    setLoadingMore(true)
+    setApiError(null)
+    try {
+      const res = await fetchEmailsPage(token, nextPageToken, 25)
+      setEmails(prev => [...prev, ...res.emails])
+      setNextPageToken(res.nextPageToken || null)
+      setLoadingMore(false)
+      await runAiClassification(res.emails)
+    } catch (err: any) {
+      setLoadingMore(false)
+      setApiError(`Failed to load more emails: ${err.message || String(err)}`)
+    }
+  }, [token, nextPageToken, loadingMore, runAiClassification])
 
   async function handleLogin(t: string) {
     setToken(t)
@@ -1357,6 +1620,7 @@ export default function App() {
   function handleDemo() {
     setUser({ email: 'demo@averis.com', name: 'Demo User' })
     setEmails(MOCK)
+    setNextPageToken(null)
     setPage('dashboard')
   }
 
@@ -1374,10 +1638,23 @@ export default function App() {
           crumb={CRUMBS[page]}
           onRefresh={page === 'inbox' && token ? () => loadEmails(token) : undefined}
           loading={loading}
+          classifying={classifying}
         />
         <main className="app-page-content">
           {page === 'dashboard' && <DashboardPage emails={emails} user={user} onNav={setPage} onSelect={selectEmail} />}
-          {page === 'inbox' && <InboxPage emails={emails} onSelect={selectEmail} />}
+          {page === 'inbox' && (
+            <InboxPage
+              emails={emails}
+              onSelect={selectEmail}
+              classifying={classifying}
+              onClassify={() => runAiClassification(emails)}
+              apiError={apiError}
+              onClearError={() => { setApiError(null); setClassifying(prev => ({ ...prev, error: null })) }}
+              hasMore={!!nextPageToken}
+              onLoadMore={loadMoreEmails}
+              loadingMore={loadingMore}
+            />
+          )}
           {page === 'email-detail' && selectedEmail && <EmailDetailPage email={selectedEmail} onBack={() => setPage('inbox')} onProcess={() => setPage('processing')} />}
           {page === 'processing' && <ProcessingPage onDone={() => setPage('comparison')} />}
           {page === 'comparison' && <ComparisonPage onBack={() => setPage('email-detail')} />}

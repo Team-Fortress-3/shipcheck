@@ -62,25 +62,25 @@ Routing is handled within `src/app/App.tsx` via the `Page` union type without ex
 ### 2. Dual Operation Modes
 - **Demo Mode**:
   - Activated by clicking **"Continue with Demo Data"** on the login screen or when `VITE_GOOGLE_CLIENT_ID` is unset.
-  - Seeds state with 7 realistic logistics emails (`MOCK`), mock comparison rows (`COMPARISON`), and simulated statuses (`Mismatch`, `Match`, `Needs Review`, `Classified`).
+  - Seeds state with 7 realistic logistics emails (`MOCK`), mock comparison rows (`COMPARISON`), and simulated statuses.
+  - Users can trigger live AI classification at any time via the **"⚡ Classify with AI"** button.
 - **Gmail API Mode**:
   - Triggered with Google OAuth login.
   - Queries `users/me/messages?maxResults=100&q=in:inbox`.
   - Concurrently fetches full message payloads (`users/me/messages/{id}?format=full`).
   - Decodes base64 body content (both plain text and multi-part MIME trees).
-  - Performs keyword-based heuristic classification.
+  - Triggers asynchronous batch classification via the FastAPI backend (`POST /api/classify`) with bounded concurrency and real-time progress reporting.
 
-### 3. Document Extraction & Comparison Engine
-- **Client-Side PDF Parsing**: `extractPdfText(file)` asynchronously imports `pdfjs-dist` and loads `pdfjs-dist/build/pdf.worker.mjs` via `URL(..., import.meta.url).href`.
-- **Field Extraction Patterns (`FIELD_PATTERNS`)**:
-  - `Shipper`
-  - `Consignee`
-  - `Notify Party`
-  - `Port of Loading` (POL)
-  - `Port of Discharge` (POD)
-  - `Container Count`
-  - `Gross Weight (kg)`
-- **Comparison Logic**: `compareDocuments(siText, blText)` matches normalized strings and flags mismatches for operator review.
+### 3. FastAPI AI Backend Integration (`email-extract-compare`)
+- **Proxy Configuration**: `vite.config.ts` proxies `/api` requests to `http://localhost:8000`.
+- **Service Layer (`src/services/api.ts`)**:
+  - `checkBackendHealth()`: `GET /api/health`
+  - `classifyEmailApi(req)`: `POST /api/classify` (uses OpenRouter / Claude Haiku)
+  - `compareFilesApi(siFile, blFile)`: `POST /api/compare` (multipart file upload for 7-field AI extraction and comparison)
+  - `classifyEmailsBatch(...)`: Concurrency-controlled runner (pool size: 2) updating UI reactively.
+- **Strict Error Handling Protocol**:
+  - **No silent fallback to client-side heuristics**: If the backend is down or an endpoint returns an error, the application displays an explicit error alert banner to the user (`AI Backend Error: ...`) and sets error indicators in the TopBar and Inbox.
+
 
 ---
 
