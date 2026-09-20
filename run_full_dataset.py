@@ -26,11 +26,11 @@ load_dotenv()
 
 import openpyxl  # noqa: E402
 
-from classify_wrapper import classify_email  # noqa: E402
-from extract import extract_fields, extract_fields_from_image, FIELDS  # noqa: E402
-from compare_ai import compare_fields_hybrid  # noqa: E402
-from readers.reader import read_attachment_text, UnreadableAttachment, ScannedPDF  # noqa: E402
-from readers.formats import render_pdf_page_as_image  # noqa: E402
+from classifier import EmailClassifier  # noqa: E402
+from compare_ai import DocumentComparator  # noqa: E402
+from check_email import AttachmentExtractor, EmailMessage  # noqa: E402
+from extract import FIELDS  # noqa: E402
+from readers.reader import UnreadableAttachment  # noqa: E402
 
 INBOX_DIR = Path(__file__).parent / "inbox"
 ATTACHMENTS_DIR = Path(__file__).parent / "attachments"
@@ -38,6 +38,10 @@ CHECKPOINT_PATH = Path(__file__).parent / "results_checkpoint.json"
 EXCEL_PATH = Path(__file__).parent / "results.xlsx"
 
 CHECKPOINT_EVERY = 10
+
+classifier = EmailClassifier()
+extractor = AttachmentExtractor(ATTACHMENTS_DIR)
+comparator = DocumentComparator()
 
 
 def load_checkpoint() -> dict:
@@ -50,17 +54,8 @@ def save_checkpoint(results: dict):
     CHECKPOINT_PATH.write_text(json.dumps(results, indent=2))
 
 
-def get_fields_for_attachment(filename: str, raw: bytes) -> tuple[dict, str]:
-    try:
-        text = read_attachment_text(filename, raw)
-        return extract_fields(text), "text"
-    except ScannedPDF as e:
-        image_bytes = render_pdf_page_as_image(e.raw_bytes)
-        return extract_fields_from_image(image_bytes), "vision"
-
-
-def process_comparison(email: dict) -> dict:
-    attachments = email.get("attachments", [])
+def process_comparison(email_msg: EmailMessage) -> dict:
+    attachments = email_msg.attachments
 
     if len(attachments) < 2:
         return {
@@ -68,20 +63,17 @@ def process_comparison(email: dict) -> dict:
             "has_defect": False, "defect_fields": [], "details": "",
         }
 
-    si_path = next((a for a in attachments if "_SI." in a), None)
-    bl_path = next((a for a in attachments if "_BL." in a), None)
+    si_path = email_msg.find_si_attachment()
+    bl_path = email_msg.find_bl_attachment()
     if not si_path or not bl_path:
         return {
             "status": "NEEDS_REVIEW", "review_reason": "wrong_doc_type",
             "has_defect": False, "defect_fields": [], "details": "",
         }
 
-    si_file = ATTACHMENTS_DIR / Path(si_path).name
-    bl_file = ATTACHMENTS_DIR / Path(bl_path).name
-
     try:
-        si_fields, _ = get_fields_for_attachment(si_file.name, si_file.read_bytes())
-        bl_fields, _ = get_fields_for_attachment(bl_file.name, bl_file.read_bytes())
+        si_fields, _ = extractor.extract_from_file(si_path)
+        bl_fields, _ = extractor.extract_from_file(bl_path)
     except UnreadableAttachment as e:
         return {
             "status": "NEEDS_REVIEW", "review_reason": "unreadable",
@@ -96,7 +88,10 @@ def process_comparison(email: dict) -> dict:
             "details": f"could not extract: {missing}",
         }
 
-    defect_fields, ai_reasoning = compare_fields_hybrid(si_fields, bl_fields, FIELDS)
+    comparison = comparator.compare(si_fields, bl_fields, FIELDS)
+    defect_fields = comparison.defect_fields
+    ai_reasoning = comparison.ai_reasoning
+
     detail_parts = []
     for field in defect_fields:
         si_val, bl_val = si_fields.get(field), bl_fields.get(field)
@@ -127,8 +122,10 @@ def main():
             continue
 
         print(f"[{i}/{total}] {eid}...", end=" ", flush=True)
+        email_msg = EmailMessage.from_dict(email)
         try:
-            category = classify_email(email)
+            classification = classifier.classify(email_msg)
+            category = classification.category
         except Exception as e:
             print(f"CLASSIFY ERROR: {e}")
             continue
@@ -137,9 +134,9 @@ def main():
             "category": category, "status": "OK", "review_reason": None,
             "has_defect": False, "defect_fields": [], "details": "",
         }
-        if category == "BL_COMPARISON":
+        if classification.is_bl_comparison:
             try:
-                row.update(process_comparison(email))
+                row.update(process_comparison(email_msg))
             except Exception as e:
                 row.update({
                     "status": "NEEDS_REVIEW", "review_reason": "unreadable",

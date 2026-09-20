@@ -21,21 +21,18 @@ sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).parent / "readers"))
 
 from parse_eml import parse_eml  # noqa: E402
-from extract import extract_fields, extract_fields_from_image, FIELDS  # noqa: E402
-from readers.reader import read_attachment_text, UnreadableAttachment, ScannedPDF  # noqa: E402
-from readers.formats import render_pdf_page_as_image  # noqa: E402
-from classify_wrapper import classify_email
+from extract import FIELDS  # noqa: E402
+from readers.reader import read_attachment_text, UnreadableAttachment  # noqa: E402
+from classifier import EmailClassifier  # noqa: E402
+from compare_ai import ValueNormalizer, DocumentComparator  # noqa: E402
+from check_email import AttachmentExtractor  # noqa: E402
 
 DEFAULT_FOLDER = Path(__file__).parent / "emails"
 
-def get_fields_for_attachment(filename: str, raw: bytes) -> tuple[dict, str]:
-    """Returns (fields, method). Raises UnreadableAttachment if nothing works."""
-    try:
-        text = read_attachment_text(filename, raw)
-        return extract_fields(text), "text"
-    except ScannedPDF as e:
-        image_bytes = render_pdf_page_as_image(e.raw_bytes)
-        return extract_fields_from_image(image_bytes), "vision"
+classifier = EmailClassifier()
+extractor = AttachmentExtractor()
+normalizer = ValueNormalizer()
+comparator = DocumentComparator()
 
 
 def identify_si_bl(attachments: list[tuple[str, bytes]]) -> tuple[dict, dict] | None:
@@ -52,7 +49,7 @@ def identify_si_bl(attachments: list[tuple[str, bytes]]) -> tuple[dict, dict] | 
     docs = []
     for filename, raw in attachments:
         try:
-            fields, method = get_fields_for_attachment(filename, raw)
+            fields, method = extractor.extract_from_bytes(filename, raw)
         except UnreadableAttachment as e:
             docs.append({"filename": filename, "error": str(e)})
             continue
@@ -82,12 +79,6 @@ def identify_si_bl(attachments: list[tuple[str, bytes]]) -> tuple[dict, dict] | 
     return None  # couldn't confidently identify both roles
 
 
-def normalize(value):
-    if value is None:
-        return None
-    return " ".join(str(value).strip().upper().replace(",", "").split())
-
-
 def process_one(eml_path: Path):
     print(f"\n{'=' * 70}")
     print(f"FILE: {eml_path.name}")
@@ -102,10 +93,10 @@ def process_one(eml_path: Path):
     print(f"Body:    {body_preview}")
 
     parsed_for_classify = {**parsed, "attachments": [fn for fn, _ in parsed["attachments"]]}
-    category = classify_email(parsed_for_classify)
-    print(f"\nCategory: {category}")
+    classification = classifier.classify(parsed_for_classify)
+    print(f"\nCategory: {classification.category}")
 
-    if category != "BL_COMPARISON":
+    if not classification.is_bl_comparison:
         print("(not a comparison request — nothing further to do)")
         return
 
@@ -129,19 +120,23 @@ def process_one(eml_path: Path):
     print(f"SI: {si['filename']} (read via {si['method']})")
     print(f"BL: {bl['filename']} (read via {bl['method']})")
     print()
+
+    comparison = comparator.compare(si["fields"], bl["fields"], FIELDS)
+
     print(f"{'FIELD':<20} {'SI':<30} {'BL':<30} {'MATCH'}")
     print("-" * 90)
-    any_mismatch = False
     for field in FIELDS:
+        comp = comparison.field_comparisons.get(field)
         si_val = si["fields"].get(field)
         bl_val = bl["fields"].get(field)
-        match = normalize(si_val) == normalize(bl_val)
-        any_mismatch |= not match
+        match = comp.is_match if comp else False
         marker = "OK" if match else "MISMATCH"
         print(f"{field:<20} {str(si_val)[:28]:<30} {str(bl_val)[:28]:<30} {marker}")
+        if comp and comp.ai_reasoning:
+            print(f"  (AI: {comp.ai_reasoning})")
 
     print()
-    print("Result:", "MISMATCH" if any_mismatch else "OK — no mismatch detected")
+    print("Result:", "MISMATCH" if comparison.has_defect else "OK — no mismatch detected")
 
 
 def main():
