@@ -1,0 +1,22 @@
+# Secrets
+api key.txt
+*.env
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Dataset
+inbox/
+attachments/
+
+# Generated output
+submission.json
+results.xlsx
+*.log
+
+# OS
+.DS_Store
