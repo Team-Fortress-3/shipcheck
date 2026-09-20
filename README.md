@@ -1,103 +1,155 @@
-# Shipping Document Verification — Extraction & Comparison Pipeline
+# ShipCheck — Shipping Document Verification & Comparison Service
 
-Part of the Averis x Monash Hackathon 2026 submission. This covers: reading
-email attachments in multiple formats, extracting the 7 standard shipment
-fields via Claude, comparing Shipping Instruction (SI) vs draft Bill of
-Lading (BL) values, and flagging cases that need human review.
+Part of the Averis x Monash Hackathon 2026 submission. **ShipCheck** is an automated shipping document processing engine and FastAPI backend serving a React operations dashboard. It extracts the 7 standard shipping fields from multi-format attachments (PDF, DOCX, XLSX, TXT) via Claude, classifies inbound correspondence, and performs hybrid deterministic + AI field comparison between Shipping Instructions (SI) and draft Bills of Lading (BL).
+
+---
 
 ## What's in here
 
-| File | Purpose |
+### 1. Backend Service (`api/`)
+| Module | Description |
 |---|---|
-| `readers/formats.py` | Converts `.txt`, `.pdf`, `.docx`, `.xlsx` attachments into plain text |
-| `readers/reader.py` | Dispatches to the right reader by file extension; distinguishes genuinely broken files from scanned PDFs with no text layer |
-| `extract.py` | Calls Claude to extract the 7 fields (shipper, consignee, notify_party, port_of_loading, port_of_discharge, container_count, gross_weight_kg) from a document — text-based, plus a vision fallback for scanned PDFs |
-| `parse_eml.py` | Parses a real `.eml` email file (subject, body, attachments) into the same shape the rest of the pipeline expects |
-| `check_email.py` | Debug tool — pass one email ID from the dataset, see its full classify → extract → compare breakdown |
-| `run_eml_folder.py` | Batch tool — drop `.eml` files into `emails/`, get a report for each; identifies SI vs BL by reading document *content*, not filename, since real emails won't follow the dataset's `_SI`/`_BL` naming convention |
+| [`api/main.py`](file:///c:/Users/PC/Documents/GitHub/email-extract-compare/api/main.py) | FastAPI application entrypoint with CORS middleware (`allow_origins=["*"]`), routes, and OpenAPI docs |
+| [`api/schemas.py`](file:///c:/Users/PC/Documents/GitHub/email-extract-compare/api/schemas.py) | Pydantic request & response models strictly matching the frontend TypeScript contracts |
+| [`api/adapter.py`](file:///c:/Users/PC/Documents/GitHub/email-extract-compare/api/adapter.py) | Data adapter translating between domain engine results and frontend UI models |
+| [`api/routes/classify.py`](file:///c:/Users/PC/Documents/GitHub/email-extract-compare/api/routes/classify.py) | `POST /api/classify` — Classifies inbound email intent with heuristic fallback |
+| [`api/routes/compare.py`](file:///c:/Users/PC/Documents/GitHub/email-extract-compare/api/routes/compare.py) | `POST /api/compare` (multipart file uploads) & `POST /api/compare/text` (raw text) |
+| [`api/routes/health.py`](file:///c:/Users/PC/Documents/GitHub/email-extract-compare/api/routes/health.py) | `GET /api/health` — Service health check & provider readiness |
 
-## How it works
+### 2. Core Processing Engine (`core/`)
+| Module | Description |
+|---|---|
+| [`core/classifier.py`](file:///c:/Users/PC/Documents/GitHub/email-extract-compare/core/classifier.py) | `EmailClassifier` & `ClassificationResult` using OpenRouter decision models (`~typesafe/jev-latest`) |
+| [`core/compare_ai.py`](file:///c:/Users/PC/Documents/GitHub/email-extract-compare/core/compare_ai.py) | `DocumentComparator`, `ValueNormalizer`, and `ComparisonResult` for hybrid field comparison |
+| [`core/extract.py`](file:///c:/Users/PC/Documents/GitHub/email-extract-compare/core/extract.py) | Claude structured tool-use extraction (text via Haiku, scanned PDF vision fallback via Sonnet) |
+| [`core/check_email.py`](file:///c:/Users/PC/Documents/GitHub/email-extract-compare/core/check_email.py) | `EmailMessage`, `AttachmentExtractor`, and `EmailVerificationPipeline` orchestrator |
+| [`core/readers/`](file:///c:/Users/PC/Documents/GitHub/email-extract-compare/core/readers) | Text extractors for `.txt`, `.pdf`, `.docx`, `.xlsx` with scanned PDF detection |
+| [`core/parse_eml.py`](file:///c:/Users/PC/Documents/GitHub/email-extract-compare/core/parse_eml.py) | Parses standard `.eml` files into subjects, bodies, and attachment byte payloads |
+
+### 3. Standalone Scripts & CLI Shims
+| Script | Description |
+|---|---|
+| `check_email.py` | CLI debugging tool — inspect single dataset email: classify → extract → compare |
+| `run_full_dataset.py` | Batch checkpoint runner producing `submission.json` and Excel evaluation reports |
+| `run_eml_folder.py` | Batch directory runner for real `.eml` files in `emails/` |
+
+---
+
+## How It Works
 
 ```
-attachment (any format) → readers/ → plain text
-                                          ↓
-                          extract.py (Claude, structured output)
-                                          ↓
-                    compare SI fields vs BL fields (deterministic)
-                                          ↓
-              OK / MISMATCH / NEEDS_REVIEW (+ which fields, + why)
+                        [ Inbound Email / Documents ]
+                                      │
+            ┌─────────────────────────┴─────────────────────────┐
+            ▼                                                   ▼
+   [ Email Classification ]                             [ Attachments (PDF/DOCX/XLSX/TXT) ]
+      EmailClassifier                                           │
+  (OpenRouter / Heuristic)                              core/readers/
+            │                                                   ▼
+     Category Assigned:                                    Plain Text / Scanned Image
+    - Document Comparison                                       │
+    - New SI Request                                            ▼
+    - Invoice Query                                    extract.py (Claude Structured Tool)
+    - General                                                   │
+    - Spam                                              7 Extracted Fields (SI & BL)
+                                                                │
+                                                                ▼
+                                                    DocumentComparator (Hybrid)
+                                                    ├─ Deterministic normalization
+                                                    └─ Claude Haiku second-pass for text
+                                                                │
+                                                                ▼
+                                                CompareResponse / VerificationReport
+                                                (Match / Mismatch / Needs Review)
 ```
 
-**Escalation (NEEDS_REVIEW) triggers on:**
-- Missing SI or BL attachment
-- A document that's corrupted / won't open
-- A scanned PDF where even the vision fallback can't extract a value
-- Any of the 7 fields coming back empty from either document
+### The 7 Standard Fields
+1. `shipper` (Shipper / Exporter details)
+2. `consignee` (Consignee)
+3. `notify_party` (Notify Party)
+4. `port_of_loading` (Port of Loading / POL)
+5. `port_of_discharge` (Port of Discharge / POD)
+6. `container_count` (Total container count, e.g. `6 x 40'HC`)
+7. `gross_weight_kg` (Total gross weight in kilograms)
 
-## Setup
+---
 
+## Frontend Integration Contracts
+
+The API endpoints strictly conform to the TypeScript contracts required by the ShipCheck frontend:
+
+```typescript
+type EmailType = "Document Comparison" | "New SI Request" | "Invoice Query" | "General" | "Spam";
+type EmailStatus = "New" | "Mismatch" | "Match" | "Needs Review" | "Classified" | "Processing";
+
+interface EmailClassifyRequest {
+  subject: string;
+  snippet: string;
+  body: string;
+}
+
+interface EmailClassifyResponse {
+  type: EmailType;
+  confidence: float;
+  reasoning?: string;
+}
+
+interface ComparisonField {
+  field: string;
+  si: string;
+  bl: string;
+  match: boolean;
+}
+
+interface CompareResponse {
+  status: EmailStatus;
+  fields: ComparisonField[];
+  summary?: string;
+}
+```
+
+---
+
+## Setup & Installation
+
+### 1. Install Dependencies
 ```bash
-pip install anthropic pdfplumber python-docx openpyxl PyMuPDF
+pip install -r requirements.txt
 ```
 
-Set your API key as an environment variable — **never hardcode it or commit
-it to a file**:
+### 2. Configure Environment Variables
+Create a `.env` file in the project root:
 
+```ini
+ANTHROPIC_API_KEY=sk-ant-...
+OPENROUTER_API_KEY=sk-or-v1-...
+```
+
+---
+
+## Running the Services
+
+### 1. Start the FastAPI Backend
 ```bash
-# macOS/Linux
-export ANTHROPIC_API_KEY=sk-ant-...
-
-# Windows PowerShell (current session only)
-$env:ANTHROPIC_API_KEY = "sk-ant-..."
-
-# Windows PowerShell (persists across sessions)
-setx ANTHROPIC_API_KEY "sk-ant-..."
+uvicorn api.main:app --reload --port 8000
 ```
+- **Interactive Swagger Docs**: [http://localhost:8000/docs](http://localhost:8000/docs)
+- **ReDoc**: [http://localhost:8000/redoc](http://localhost:8000/redoc)
+- **Health Check**: [http://localhost:8000/api/health](http://localhost:8000/api/health)
 
-### Dataset
-
-The organizers' dataset (`inbox/` and `attachments/`) is **not included in
-this repo** — it's provided separately by Averis and shouldn't be
-redistributed. To run `check_email.py` against it, copy those two folders
-from the organizers' zip into this directory:
-
-```
-.
-├── inbox/            <- from the organizers' dataset, not committed
-├── attachments/       <- from the organizers' dataset, not committed
-├── check_email.py
-└── ...
-```
-
-## Usage
-
-**Check one email from the dataset:**
+### 2. CLI Debugging Tool
+Verify an email from the dataset (`inbox/email_NNN.json` and `attachments/`):
 ```bash
-python3 check_email.py 004
+python check_email.py 004
 ```
-Prints the email's classification, identifies its SI/BL attachments,
-extracts all 7 fields from each, and shows a side-by-side comparison table.
 
-**Process a batch of real `.eml` files:**
+### 3. Batch Evaluation
+Run across all emails in the dataset and generate `submission.json` and `results.xlsx`:
 ```bash
-python3 run_eml_folder.py            # looks in ./emails by default
-python3 run_eml_folder.py some/folder
+python run_full_dataset.py
 ```
 
-## Known limitations / next steps
-
-- **Field comparison is currently exact-match** (after basic normalization —
-  case, whitespace, commas). It does not yet handle cases where two values
-  refer to the same thing but are worded/ordered differently (e.g. a
-  reordered address). An AI-based fuzzy comparison step for the text fields
-  (shipper, consignee, notify_party, ports) is designed but not yet built —
-  see discussion in project notes.
-- **`classify.py`** is a teammate's deliverable, not part of this folder —
-  the pipeline above assumes a `classify_email(email) -> category` function
-  exists somewhere and returns one of the 5 required category strings
-  (`BL_COMPARISON`, `SI_REQUEST`, `INVOICE_QUERY`, `GENERAL`, `SPAM`); wire
-  it in once it's ready.
-- The vision fallback (scanned PDFs) uses a stronger model
-  (`claude-sonnet-5`) than plain text extraction (`claude-haiku-4-5`) — this
-  was a deliberate fix after testing showed the cheaper model misread
-  clearly legible scanned text.
+### 4. Process a Folder of `.eml` Files
+```bash
+python run_eml_folder.py ./emails
+```

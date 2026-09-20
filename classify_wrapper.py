@@ -1,10 +1,3 @@
-"""Wrapper around EmailClassifier for legacy or simple functional calls."""
-from classifier import ClassificationResult, EmailClassifier
-
-_classifier = EmailClassifier()
-
-
-def classify_email(email: dict) -> str:
-    """Classify an email and return its category string."""
-    result: ClassificationResult = _classifier.classify(email)
-    return result.category
+"""Root shim re-exporting classify_wrapper from core package."""
+from core.classify_wrapper import *  # noqa: F401, F403
+from core.classify_wrapper import classify_email  # noqa: F401
