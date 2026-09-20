@@ -3,9 +3,13 @@ import { useGoogleLogin } from '@react-oauth/google'
 import {
   classifyEmailsBatch,
   compareFilesApi,
+  getCachedEmailsApi,
+  syncEmailBatchApi,
+  getComparisonsApi,
   type EmailType,
   type EmailStatus,
   type ComparisonField,
+  type ComparisonRecord,
 } from '../services/api'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -385,7 +389,23 @@ function TopBar({
 
 // ─── Dashboard ────────────────────────────────────────────────────────────────
 
-function DashboardPage({ emails, user, onNav, onSelect }: { emails: GmailEmail[]; user: UserInfo | null; onNav: (p: Page) => void; onSelect: (id: string) => void }) {
+function DashboardPage({
+  emails,
+  user,
+  onNav,
+  onSelect,
+  loading,
+  classifying,
+  apiError,
+}: {
+  emails: GmailEmail[]
+  user: UserInfo | null
+  onNav: (p: Page) => void
+  onSelect: (id: string) => void
+  loading?: boolean
+  classifying?: { active: boolean; current: number; total: number; error: string | null }
+  apiError?: string | null
+}) {
   const hour = new Date().getHours()
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening'
   const firstName = user?.name?.split(' ')[0] || 'User'
@@ -394,6 +414,7 @@ function DashboardPage({ emails, user, onNav, onSelect }: { emails: GmailEmail[]
   const mismatches = emails.filter(e => e.status === 'Mismatch')
   const review = emails.filter(e => e.status === 'Needs Review')
   const attention = emails.filter(e => e.status === 'Mismatch' || e.status === 'Needs Review')
+  const progressPercent = classifying?.total ? Math.round((classifying.current / classifying.total) * 100) : 0
 
   return (
     <div style={{ padding: 28, flex: 1 }}>
@@ -404,9 +425,9 @@ function DashboardPage({ emails, user, onNav, onSelect }: { emails: GmailEmail[]
         </h1>
 
         {/* Status strip — amber background only on actionable cells */}
-        <div style={{ display: 'flex', alignItems: 'stretch', gap: 0, border: `1px solid ${border}`, borderRadius: 4, overflow: 'hidden' }}>
+        <div style={{ display: 'flex', alignItems: 'stretch', gap: 0, border: `1px solid ${border}`, borderRadius: 4, overflow: 'hidden', marginBottom: 18 }}>
           {[
-            { label: 'Emails', value: emails.length, sub: 'in inbox', urgent: false, click: () => onNav('inbox') },
+            { label: 'Emails', value: emails.length, sub: loading ? 'Fetching…' : 'in inbox', urgent: false, click: () => onNav('inbox') },
             { label: 'Doc Checks', value: docComps.length, sub: `${docComps.filter(e => e.status === 'Match').length} matched`, urgent: false, click: () => onNav('inbox') },
             { label: 'Mismatches', value: mismatches.length, sub: mismatches.length ? 'Action required' : 'All clear', urgent: mismatches.length > 0, click: () => onNav('inbox') },
             { label: 'Needs Review', value: review.length, sub: review.length ? 'Human review' : 'None pending', urgent: review.length > 0, click: () => onNav('review') },
@@ -422,6 +443,40 @@ function DashboardPage({ emails, user, onNav, onSelect }: { emails: GmailEmail[]
             </button>
           ))}
         </div>
+
+        {/* Initial Fetching Banner */}
+        {loading && (
+          <div style={{ background: '#F7F5EF', border: `1px solid ${border}`, borderRadius: 4, padding: '12px 18px', marginBottom: 18, display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ width: 14, height: 14, borderRadius: '50%', border: `2px solid ${navy}`, borderTopColor: 'transparent', animation: 'spin 0.7s linear infinite', display: 'inline-block' }} />
+            <span style={{ fontSize: 12, fontWeight: 600, color: navy }}>Retrieving latest shipping emails from Gmail inbox…</span>
+          </div>
+        )}
+
+        {/* Classification Progress Banner */}
+        {classifying?.active && (
+          <div style={{ background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 4, padding: '14px 20px', marginBottom: 18 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 12, fontWeight: 600, color: '#1E40AF' }}>
+                <span style={{ width: 14, height: 14, borderRadius: '50%', border: '2px solid #2563EB', borderTopColor: 'transparent', animation: 'spin 0.7s linear infinite', display: 'inline-block' }} />
+                AI PIPELINE ACTIVE: Classifying emails with Claude Haiku ({classifying.current} of {classifying.total} analyzed)…
+              </div>
+              <span style={{ fontSize: 11, fontWeight: 700, color: '#2563EB' }}>
+                {progressPercent}%
+              </span>
+            </div>
+            <div style={{ width: '100%', height: 4, background: '#DBEAFE', borderRadius: 2, overflow: 'hidden' }}>
+              <div style={{ width: `${progressPercent}%`, height: '100%', background: '#2563EB', transition: 'width 0.3s ease' }} />
+            </div>
+          </div>
+        )}
+
+        {/* Error Alert */}
+        {(classifying?.error || apiError) && (
+          <div style={{ background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 4, padding: '12px 18px', marginBottom: 18, display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#991B1B', fontWeight: 500 }}>
+            <span style={{ fontSize: 14 }}>⚠</span>
+            <span><strong>Pipeline Error:</strong> {classifying?.error || apiError}</span>
+          </div>
+        )}
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 320px', gap: 20 }}>
@@ -429,8 +484,19 @@ function DashboardPage({ emails, user, onNav, onSelect }: { emails: GmailEmail[]
         <div>
           <SectionLabel>Recent Activity</SectionLabel>
           <div style={{ border: `1px solid ${border}`, borderRadius: 4, overflow: 'hidden', background: white }}>
-            {emails.slice(0, 6).map((e, i) => {
-              return (
+            {emails.length === 0 ? (
+              <div style={{ padding: '36px 20px', textAlign: 'center', color: muted, fontSize: 13 }}>
+                {loading ? (
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10 }}>
+                    <span style={{ width: 14, height: 14, borderRadius: '50%', border: `2px solid ${navy}`, borderTopColor: 'transparent', animation: 'spin 0.7s linear infinite', display: 'inline-block' }} />
+                    Retrieving emails from inbox…
+                  </div>
+                ) : (
+                  'No emails loaded yet.'
+                )}
+              </div>
+            ) : (
+              emails.slice(0, 6).map((e, i) => (
                 <button
                   key={e.id}
                   onClick={() => onSelect(e.id)}
@@ -453,8 +519,8 @@ function DashboardPage({ emails, user, onNav, onSelect }: { emails: GmailEmail[]
                     </div>
                   </div>
                 </button>
-              )
-            })}
+              ))
+            )}
             <button onClick={() => onNav('inbox')} style={{ width: '100%', padding: '10px 20px', border: 'none', background: surface, cursor: 'pointer', fontSize: 11, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: navy, textAlign: 'left', borderTop: `1px solid ${borderLight}` }}>
               View all {emails.length} emails →
             </button>
@@ -1579,20 +1645,65 @@ export default function App() {
     setClassifying(prev => ({ ...prev, active: false }))
   }, [])
 
+  // Check for already-cached emails in SQLite on mount for sub-10ms instant startup
+  useEffect(() => {
+    getCachedEmailsApi(50)
+      .then(cached => {
+        if (cached && cached.length > 0) {
+          setEmails(cached)
+          setUser({ email: 'operator@shipping.com', name: 'Shipping Operator' })
+          setPage('dashboard')
+        }
+      })
+      .catch(() => {})
+  }, [])
+
+  const syncEmailsWithBackend = useCallback(async (targets: GmailEmail[]) => {
+    if (!targets.length) return
+    setClassifying({ active: true, current: 0, total: targets.length, error: null })
+    setApiError(null)
+    try {
+      const synced = await syncEmailBatchApi(targets)
+      setEmails(prev => {
+        const syncedMap = new Map(synced.map(e => [e.id, e]))
+        const updated = prev.map(e => syncedMap.get(e.id) || e)
+        const existingIds = new Set(prev.map(e => e.id))
+        const newEmails = synced.filter(e => !existingIds.has(e.id))
+        return [...updated, ...newEmails]
+      })
+      setClassifying({ active: false, current: targets.length, total: targets.length, error: null })
+    } catch (err: any) {
+      console.error('Batch sync failed:', err)
+      const msg = `Backend Sync Failed: ${err.message || String(err)}`
+      setClassifying(prev => ({ ...prev, active: false, error: msg }))
+      setApiError(msg)
+    }
+  }, [])
+
   const loadEmails = useCallback(async (t: string) => {
     setLoading(true)
     setApiError(null)
     try {
+      // 1. Instant Cache-First: retrieve existing from SQLite (<10ms)
+      try {
+        const cached = await getCachedEmailsApi(50)
+        if (cached && cached.length > 0) {
+          setEmails(cached)
+        }
+      } catch {}
+
+      // 2. Fetch latest 25 messages from Gmail
       const res = await fetchEmailsPage(t, undefined, 25)
-      setEmails(res.emails)
       setNextPageToken(res.nextPageToken || null)
-      setLoading(false)
-      await runAiClassification(res.emails)
+
+      // 3. Sync to SQLite (only classifies unclassified messages at 0 token cost for existing)
+      await syncEmailsWithBackend(res.emails)
     } catch (err: any) {
-      setLoading(false)
       setApiError(`Failed to fetch emails: ${err.message || String(err)}`)
+    } finally {
+      setLoading(false)
     }
-  }, [runAiClassification])
+  }, [syncEmailsWithBackend])
 
   const loadMoreEmails = useCallback(async () => {
     if (!token || !nextPageToken || loadingMore) return
@@ -1600,21 +1711,20 @@ export default function App() {
     setApiError(null)
     try {
       const res = await fetchEmailsPage(token, nextPageToken, 25)
-      setEmails(prev => [...prev, ...res.emails])
       setNextPageToken(res.nextPageToken || null)
-      setLoadingMore(false)
-      await runAiClassification(res.emails)
+      await syncEmailsWithBackend(res.emails)
     } catch (err: any) {
-      setLoadingMore(false)
       setApiError(`Failed to load more emails: ${err.message || String(err)}`)
+    } finally {
+      setLoadingMore(false)
     }
-  }, [token, nextPageToken, loadingMore, runAiClassification])
+  }, [token, nextPageToken, loadingMore, syncEmailsWithBackend])
 
   async function handleLogin(t: string) {
     setToken(t)
-    try { setUser(await getUserInfo(t)) } catch {}
-    await loadEmails(t)
     setPage('dashboard')
+    getUserInfo(t).then(u => setUser(u)).catch(() => {})
+    loadEmails(t)
   }
 
   function handleDemo() {
@@ -1641,13 +1751,23 @@ export default function App() {
           classifying={classifying}
         />
         <main className="app-page-content">
-          {page === 'dashboard' && <DashboardPage emails={emails} user={user} onNav={setPage} onSelect={selectEmail} />}
+          {page === 'dashboard' && (
+            <DashboardPage
+              emails={emails}
+              user={user}
+              onNav={setPage}
+              onSelect={selectEmail}
+              loading={loading}
+              classifying={classifying}
+              apiError={apiError}
+            />
+          )}
           {page === 'inbox' && (
             <InboxPage
               emails={emails}
               onSelect={selectEmail}
               classifying={classifying}
-              onClassify={() => runAiClassification(emails)}
+              onClassify={() => syncEmailsWithBackend(emails)}
               apiError={apiError}
               onClearError={() => { setApiError(null); setClassifying(prev => ({ ...prev, error: null })) }}
               hasMore={!!nextPageToken}

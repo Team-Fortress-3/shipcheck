@@ -27,12 +27,101 @@ export interface CompareResponse {
   status: EmailStatus
   fields: ComparisonField[]
   summary?: string
+  comparison_id?: number
+}
+
+export interface ComparisonRecord {
+  id: number
+  email_id?: string
+  si_name: string
+  bl_name: string
+  status: EmailStatus
+  summary?: string
+  fields_json: string
+  fields?: ComparisonField[]
+  reviewed: boolean
+  reviewed_by?: string
+  created_at: string
+}
+
+export function parseComparisonRecord(record: any): ComparisonRecord {
+  let fields: ComparisonField[] = []
+  try {
+    fields = typeof record.fields_json === 'string' ? JSON.parse(record.fields_json) : (record.fields || [])
+  } catch {
+    fields = []
+  }
+  return {
+    ...record,
+    fields,
+  }
+}
+
+export function mapEmailRecordToGmailEmail(record: any): {
+  id: string
+  threadId: string
+  from: string
+  fromName: string
+  subject: string
+  snippet: string
+  date: string
+  timestamp: number
+  type: EmailType
+  status: EmailStatus
+  hasAttachments: boolean
+  body?: string
+} {
+  return {
+    id: record.id,
+    threadId: record.thread_id || record.threadId || record.id,
+    from: record.from_email || record.from || '',
+    fromName: record.from_name || record.fromName || '',
+    subject: record.subject || '(no subject)',
+    snippet: record.snippet || '',
+    date: record.date_str || record.date || '',
+    timestamp: record.timestamp || Date.now(),
+    type: (record.email_type || record.type || 'General') as EmailType,
+    status: (record.status || 'Classified') as EmailStatus,
+    hasAttachments: record.has_attachments ?? record.hasAttachments ?? false,
+    body: record.body_snippet || record.body || '',
+  }
+}
+
+export function mapGmailEmailToCreatePayload(email: {
+  id: string
+  threadId: string
+  from: string
+  fromName: string
+  subject: string
+  snippet: string
+  date: string
+  timestamp: number
+  type: EmailType
+  status: EmailStatus
+  hasAttachments: boolean
+  body?: string
+}): any {
+  return {
+    id: email.id,
+    thread_id: email.threadId,
+    from_name: email.fromName,
+    from_email: email.from,
+    subject: email.subject,
+    snippet: email.snippet,
+    date_str: email.date,
+    timestamp: email.timestamp,
+    email_type: email.type,
+    status: email.status,
+    has_attachments: email.hasAttachments,
+    body_snippet: email.body ? email.body.slice(0, 1000) : email.snippet,
+  }
 }
 
 export interface HealthResponse {
   status: string
   provider?: string
   model?: string
+  database?: string
   [key: string]: any
 }
 
@@ -47,26 +136,45 @@ export async function checkBackendHealth(): Promise<HealthResponse> {
   return res.json()
 }
 
+async function extractErrorDetail(res: Response): Promise<string> {
+  if (res.status === 502 || res.status === 504) {
+    return 'FastAPI backend service is not running at http://localhost:8000. Please start the backend server (uvicorn api.main:app --reload --port 8000).'
+  }
+  if (res.status === 404) {
+    return `Endpoint ${res.url} not found (404). Please ensure the backend is running with the latest routes.`
+  }
+  try {
+    const text = await res.text()
+    try {
+      const json = JSON.parse(text)
+      return json.detail || JSON.stringify(json)
+    } catch {
+      return text.slice(0, 300) || res.statusText
+    }
+  } catch {
+    return res.statusText
+  }
+}
+
 /**
  * Sends an email to the FastAPI backend for classification using Claude Haiku / OpenRouter.
  * Strict error handling: Throws an Error if backend is unreachable or returns a non-200 status.
  */
 export async function classifyEmailApi(req: EmailClassifyRequest): Promise<EmailClassifyResponse> {
-  const res = await fetch('/api/classify', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(req),
-  })
+  let res: Response
+  try {
+    res = await fetch('/api/classify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req),
+    })
+  } catch (err: any) {
+    throw new Error('FastAPI backend service is offline. Please start it at http://localhost:8000 (uvicorn api.main:app --reload --port 8000).')
+  }
 
   if (!res.ok) {
-    let detail = ''
-    try {
-      const errJson = await res.json()
-      detail = errJson.detail || JSON.stringify(errJson)
-    } catch {
-      detail = await res.text()
-    }
-    throw new Error(`Classification API error (${res.status}): ${detail || res.statusText}`)
+    const detail = await extractErrorDetail(res)
+    throw new Error(`Classification API error (${res.status}): ${detail}`)
   }
 
   return res.json()
@@ -81,20 +189,19 @@ export async function compareFilesApi(siFile: File, blFile: File): Promise<Compa
   formData.append('si_file', siFile)
   formData.append('bl_file', blFile)
 
-  const res = await fetch('/api/compare', {
-    method: 'POST',
-    body: formData,
-  })
+  let res: Response
+  try {
+    res = await fetch('/api/compare', {
+      method: 'POST',
+      body: formData,
+    })
+  } catch {
+    throw new Error('FastAPI backend service is offline. Please start it at http://localhost:8000 (uvicorn api.main:app --reload --port 8000).')
+  }
 
   if (!res.ok) {
-    let detail = ''
-    try {
-      const errJson = await res.json()
-      detail = errJson.detail || JSON.stringify(errJson)
-    } catch {
-      detail = await res.text()
-    }
-    throw new Error(`Comparison API error (${res.status}): ${detail || res.statusText}`)
+    const detail = await extractErrorDetail(res)
+    throw new Error(`Comparison API error (${res.status}): ${detail}`)
   }
 
   return res.json()
@@ -104,21 +211,20 @@ export async function compareFilesApi(siFile: File, blFile: File): Promise<Compa
  * Direct raw-text comparison endpoint.
  */
 export async function compareTextApi(siText: string, blText: string): Promise<CompareResponse> {
-  const res = await fetch('/api/compare/text', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ si_text: siText, bl_text: blText }),
-  })
+  let res: Response
+  try {
+    res = await fetch('/api/compare/text', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ si_text: siText, bl_text: blText }),
+    })
+  } catch {
+    throw new Error('FastAPI backend service is offline. Please start it at http://localhost:8000 (uvicorn api.main:app --reload --port 8000).')
+  }
 
   if (!res.ok) {
-    let detail = ''
-    try {
-      const errJson = await res.json()
-      detail = errJson.detail || JSON.stringify(errJson)
-    } catch {
-      detail = await res.text()
-    }
-    throw new Error(`Text comparison API error (${res.status}): ${detail || res.statusText}`)
+    const detail = await extractErrorDetail(res)
+    throw new Error(`Text comparison API error (${res.status}): ${detail}`)
   }
 
   return res.json()
@@ -156,4 +262,76 @@ export async function classifyEmailsBatch<T extends { subject: string; snippet: 
   const workers = Array.from({ length: Math.min(concurrency, items.length) }, () => worker())
   await Promise.all(workers)
 }
+
+/**
+ * Fetches cached emails from the SQLite database.
+ */
+export async function getCachedEmailsApi(limit = 50, offset = 0, emailType?: string, status?: string): Promise<any[]> {
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) })
+  if (emailType) params.append('email_type', emailType)
+  if (status) params.append('status', status)
+
+  let res: Response
+  try {
+    res = await fetch(`/api/emails?${params.toString()}`)
+  } catch {
+    throw new Error('FastAPI backend service is offline. Please start it at http://localhost:8000 (uvicorn api.main:app --reload --port 8000).')
+  }
+
+  if (!res.ok) {
+    const detail = await extractErrorDetail(res)
+    throw new Error(`Failed to fetch cached emails (${res.status}): ${detail}`)
+  }
+
+  const data = await res.json()
+  return (data || []).map(mapEmailRecordToGmailEmail)
+}
+
+/**
+ * Syncs a batch of Gmail messages to the backend SQLite cache.
+ * Existing emails in SQLite are returned at 0 token cost;
+ * only new unclassified emails are classified via Claude Haiku and persisted.
+ */
+export async function syncEmailBatchApi(emails: any[]): Promise<any[]> {
+  const payload = emails.map(e => mapGmailEmailToCreatePayload(e))
+  let res: Response
+  try {
+    res = await fetch('/api/emails/batch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+  } catch {
+    throw new Error('FastAPI backend service is offline. Please start it at http://localhost:8000 (uvicorn api.main:app --reload --port 8000).')
+  }
+
+  if (!res.ok) {
+    const detail = await extractErrorDetail(res)
+    throw new Error(`Email batch sync failed (${res.status}): ${detail}`)
+  }
+
+  const data = await res.json()
+  return (data || []).map(mapEmailRecordToGmailEmail)
+}
+
+/**
+ * Fetches historical comparison records from SQLite.
+ */
+export async function getComparisonsApi(limit = 50, offset = 0): Promise<ComparisonRecord[]> {
+  const res = await fetch(`/api/comparisons?limit=${limit}&offset=${offset}`)
+  if (!res.ok) throw new Error(`Failed to fetch comparisons: ${res.status}`)
+  const data = await res.json()
+  return (data || []).map(parseComparisonRecord)
+}
+
+/**
+ * Fetches a single comparison by ID.
+ */
+export async function getComparisonByIdApi(id: number): Promise<ComparisonRecord> {
+  const res = await fetch(`/api/comparisons/${id}`)
+  if (!res.ok) throw new Error(`Failed to fetch comparison ${id}: ${res.status}`)
+  const data = await res.json()
+  return parseComparisonRecord(data)
+}
+
 
