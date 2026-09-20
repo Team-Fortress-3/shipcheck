@@ -21,16 +21,17 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).parent / "readers"))
 
-from dotenv import load_dotenv  # noqa: E402
+from dotenv import load_dotenv
+
 load_dotenv()
 
-import openpyxl  # noqa: E402
+import openpyxl
 
-from classifier import EmailClassifier  # noqa: E402
-from compare_ai import DocumentComparator  # noqa: E402
-from check_email import AttachmentExtractor, EmailMessage  # noqa: E402
-from extract import FIELDS  # noqa: E402
-from readers.reader import UnreadableAttachment  # noqa: E402
+from check_email import AttachmentExtractor, EmailMessage
+from classifier import EmailClassifier
+from compare_ai import DocumentComparator
+from extract import FIELDS
+from readers.reader import UnreadableAttachment
 
 INBOX_DIR = Path(__file__).parent / "inbox"
 ATTACHMENTS_DIR = Path(__file__).parent / "attachments"

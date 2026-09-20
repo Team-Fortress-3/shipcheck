@@ -8,6 +8,7 @@ preserving strict deterministic checking for numeric fields.
 """
 from dataclasses import dataclass, field
 from typing import Any
+
 import anthropic
 
 DEFAULT_MODEL = "claude-haiku-4-5-20251001"

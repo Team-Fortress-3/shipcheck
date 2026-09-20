@@ -15,16 +15,19 @@ import json
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).parent / "readers"))
 
-from classifier import EmailClassifier, ClassificationResult  # noqa: E402
-from compare_ai import DocumentComparator, ComparisonResult  # noqa: E402
-from extract import extract_fields, extract_fields_from_image, FIELDS  # noqa: E402
-from readers.reader import read_attachment_text, UnreadableAttachment, ScannedPDF  # noqa: E402
-from readers.formats import render_pdf_page_as_image  # noqa: E402
+from classifier import ClassificationResult, EmailClassifier
+from compare_ai import ComparisonResult, DocumentComparator
+from extract import FIELDS, extract_fields, extract_fields_from_image
+from readers.formats import render_pdf_page_as_image
+from readers.reader import (
+    ScannedPDF,
+    UnreadableAttachment,
+    read_attachment_text,
+)
 
 INBOX_DIR = Path(__file__).parent / "inbox"
 ATTACHMENTS_DIR = Path(__file__).parent / "attachments"

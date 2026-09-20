@@ -1,7 +1,8 @@
-import os
 import json
+import os
 from dataclasses import dataclass, field
 from typing import Any
+
 from dotenv import load_dotenv
 from openrouter import OpenRouter
 
@@ -35,7 +36,7 @@ class EmailClassifier:
 
     DEFAULT_MODEL = "~typesafe/jev-latest"
 
-    DEFAULT_OPTIONS = {
+    DEFAULT_OPTIONS = {  # noqa: RUF012
         "BL_COMPARISON": (
             "The email is CURRENTLY presenting a Shipping Instruction and a draft "
             "Bill of Lading TOGETHER and asking for them to be checked/compared "

@@ -1,5 +1,5 @@
 """Wrapper around EmailClassifier for legacy or simple functional calls."""
-from classifier import EmailClassifier, ClassificationResult
+from classifier import ClassificationResult, EmailClassifier
 
 _classifier = EmailClassifier()
 

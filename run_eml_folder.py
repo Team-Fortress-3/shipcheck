@@ -14,18 +14,20 @@ here. Swap classify_email() for the real one once it's ready.
 """
 import sys
 from pathlib import Path
+
 from dotenv import load_dotenv
+
 load_dotenv()
 
 sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).parent / "readers"))
 
-from parse_eml import parse_eml  # noqa: E402
-from extract import FIELDS  # noqa: E402
-from readers.reader import read_attachment_text, UnreadableAttachment  # noqa: E402
-from classifier import EmailClassifier  # noqa: E402
-from compare_ai import ValueNormalizer, DocumentComparator  # noqa: E402
-from check_email import AttachmentExtractor  # noqa: E402
+from check_email import AttachmentExtractor
+from classifier import EmailClassifier
+from compare_ai import DocumentComparator, ValueNormalizer
+from extract import FIELDS
+from parse_eml import parse_eml
+from readers.reader import UnreadableAttachment, read_attachment_text
 
 DEFAULT_FOLDER = Path(__file__).parent / "emails"
 
