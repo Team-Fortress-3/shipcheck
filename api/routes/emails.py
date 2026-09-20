@@ -68,10 +68,12 @@ async def batch_sync_emails(
 
     for item in emails:
         if item.id in existing_records:
-            results.append(existing_records[item.id])
-            continue
+            rec = existing_records[item.id]
+            if rec.status and rec.status != "Processing":
+                results.append(rec)
+                continue
 
-        # 2. Classify new email
+        # 2. Classify new or unclassified email
         email_data = {
             "subject": item.subject,
             "snippet": item.snippet,
@@ -92,36 +94,46 @@ async def batch_sync_emails(
                 })()
             )
 
-        email_type = item.email_type or classify_resp.type
-        status = item.status or ("New" if email_type == "Document Comparison" else "Classified")
+        email_type = classify_resp.type
+        status = "New" if email_type == "Document Comparison" else "Classified"
 
-        new_record = EmailRecord(
-            id=item.id,
-            thread_id=item.thread_id,
-            from_name=item.from_name,
-            from_email=item.from_email,
-            subject=item.subject,
-            snippet=item.snippet,
-            date_str=item.date_str,
-            timestamp=item.timestamp,
-            email_type=email_type,
-            status=status,
-            confidence=classify_resp.confidence,
-            reasoning=classify_resp.reasoning,
-            has_attachments=item.has_attachments,
-            body_snippet=item.body_snippet or (item.body[:200] if item.body else item.snippet[:200]),
-            created_at=utc_now(),
-            updated_at=utc_now(),
-        )
-
-        to_add.append(new_record)
-        results.append(new_record)
+        if item.id in existing_records:
+            rec = existing_records[item.id]
+            rec.email_type = email_type
+            rec.status = status
+            rec.confidence = classify_resp.confidence
+            rec.reasoning = classify_resp.reasoning
+            rec.body_snippet = item.body_snippet or (item.body[:200] if item.body else item.snippet[:200])
+            rec.updated_at = utc_now()
+            session.add(rec)
+            results.append(rec)
+        else:
+            new_record = EmailRecord(
+                id=item.id,
+                thread_id=item.thread_id,
+                from_name=item.from_name,
+                from_email=item.from_email,
+                subject=item.subject,
+                snippet=item.snippet,
+                date_str=item.date_str,
+                timestamp=item.timestamp,
+                email_type=email_type,
+                status=status,
+                confidence=classify_resp.confidence,
+                reasoning=classify_resp.reasoning,
+                has_attachments=item.has_attachments,
+                body_snippet=item.body_snippet or (item.body[:200] if item.body else item.snippet[:200]),
+                created_at=utc_now(),
+                updated_at=utc_now(),
+            )
+            to_add.append(new_record)
+            results.append(new_record)
 
     if to_add:
         session.add_all(to_add)
-        session.commit()
-        for r in to_add:
-            session.refresh(r)
+    session.commit()
+    for r in results:
+        session.refresh(r)
 
     return results
 
