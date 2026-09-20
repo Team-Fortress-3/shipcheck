@@ -14,6 +14,8 @@ here. Swap classify_email() for the real one once it's ready.
 """
 import sys
 from pathlib import Path
+from dotenv import load_dotenv
+load_dotenv()
 
 sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).parent / "readers"))
@@ -22,16 +24,9 @@ from parse_eml import parse_eml  # noqa: E402
 from extract import extract_fields, extract_fields_from_image, FIELDS  # noqa: E402
 from readers.reader import read_attachment_text, UnreadableAttachment, ScannedPDF  # noqa: E402
 from readers.formats import render_pdf_page_as_image  # noqa: E402
+from classify_wrapper import classify_email
 
 DEFAULT_FOLDER = Path(__file__).parent / "emails"
-
-
-def classify_email(parsed: dict) -> str:
-    # PLACEHOLDER — replace with the real classify.py once ready.
-    if len(parsed["attachments"]) >= 2:
-        return "BL_COMPARISON"
-    return "GENERAL"
-
 
 def get_fields_for_attachment(filename: str, raw: bytes) -> tuple[dict, str]:
     """Returns (fields, method). Raises UnreadableAttachment if nothing works."""
@@ -106,7 +101,8 @@ def process_one(eml_path: Path):
     body_preview = parsed["body"][:150] + ("..." if len(parsed["body"]) > 150 else "")
     print(f"Body:    {body_preview}")
 
-    category = classify_email(parsed)
+    parsed_for_classify = {**parsed, "attachments": [fn for fn, _ in parsed["attachments"]]}
+    category = classify_email(parsed_for_classify)
     print(f"\nCategory: {category}")
 
     if category != "BL_COMPARISON":

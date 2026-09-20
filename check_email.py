@@ -18,6 +18,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).parent / "readers"))
 
+from classify_wrapper import classify_email  # noqa: E402
 from extract import extract_fields, extract_fields_from_image, FIELDS  # noqa: E402
 from readers.reader import read_attachment_text, UnreadableAttachment, ScannedPDF  # noqa: E402
 from readers.formats import render_pdf_page_as_image  # noqa: E402
@@ -78,6 +79,15 @@ def main():
     print(f"Attachments ({len(attachments)}): {attachments}")
     print()
 
+    print("Classifying...")
+    category = classify_email(email)
+    print(f"Category: {category}")
+    print()
+
+    if category != "BL_COMPARISON":
+        print("(not a comparison request — nothing further to do)")
+        return
+
     if not attachments:
         print("No attachments on this email — nothing to compare.")
         return
@@ -107,23 +117,26 @@ def main():
 
     si_fields, bl_fields = results["SI"], results["BL"]
 
+    from compare_ai import compare_fields_hybrid, normalize
+
+    defect_fields, ai_reasoning = compare_fields_hybrid(si_fields, bl_fields, FIELDS)
+
     print()
     print(f"{'FIELD':<20} {'SI':<35} {'BL':<35} {'MATCH'}")
     print("-" * 100)
-    any_mismatch = False
     for field in FIELDS:
         si_val = si_fields.get(field)
         bl_val = bl_fields.get(field)
-        match = normalize_for_compare(si_val) == normalize_for_compare(bl_val)
-        if not match:
-            any_mismatch = True
+        match = field not in defect_fields
         marker = "✓" if match else "✗ MISMATCH"
         si_display = str(si_val)[:33] if si_val is not None else "(none)"
         bl_display = str(bl_val)[:33] if bl_val is not None else "(none)"
         print(f"{field:<20} {si_display:<35} {bl_display:<35} {marker}")
+        if field in ai_reasoning:
+            print(f"  (AI check: {ai_reasoning[field]})")
 
     print()
-    if any_mismatch:
+    if defect_fields:
         print("Result: MISMATCH")
     else:
         print("Result: OK — no mismatch detected")

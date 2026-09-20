@@ -131,7 +131,7 @@ def extract_fields_from_image(
 
 
 if __name__ == "__main__":
-    # quick manual test — run with:  ANTHROPIC_API_KEY=sk-... python extract.py
+    # quick manual test run with:  ANTHROPIC_API_KEY=sk-... python extract.py
     sample = """
     SHIPPING INSTRUCTION
     Shipper: APRIL FAR EAST (M) SDN BHD
