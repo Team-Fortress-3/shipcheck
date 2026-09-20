@@ -5,6 +5,7 @@ import {
   compareFilesApi,
   getCachedEmailsApi,
   syncEmailBatchApi,
+  syncEmailBatchProgressive,
   getComparisonsApi,
   type EmailType,
   type EmailStatus,
@@ -230,6 +231,40 @@ function Divider() {
   return <div style={{ height: 1, background: borderLight, margin: '20px 0' }} />
 }
 
+function Spinner({ size = 14, color = navy, className = '' }: { size?: number; color?: string; className?: string }) {
+  return (
+    <svg
+      className={`animate-spin ${className}`}
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+      style={{
+        display: 'inline-block',
+        verticalAlign: 'middle',
+        flexShrink: 0,
+        animation: 'spin 0.8s linear infinite',
+      }}
+    >
+      <circle
+        cx="12"
+        cy="12"
+        r="10"
+        stroke={color}
+        strokeWidth="3"
+        strokeOpacity="0.25"
+      />
+      <path
+        d="M12 2a10 10 0 0 1 10 10"
+        stroke={color}
+        strokeWidth="3"
+        strokeLinecap="round"
+      />
+    </svg>
+  )
+}
+
 function Badge({ label }: { label: string }) {
   const map: Record<string, { bg: string; color: string; border: string }> = {
     'Document Comparison': { bg: '#EEF2FF', color: '#3730A3', border: '#C7D2FE' },
@@ -242,12 +277,15 @@ function Badge({ label }: { label: string }) {
     'Match':               { bg: greenBg,  color: green,     border: '#86EFAC' },
     'Classified':          { bg: '#F3F4F6', color: '#4B5563', border: '#E5E7EB' },
     'New':                 { bg: '#EFF6FF', color: '#1D4ED8', border: '#BFDBFE' },
+    'Processing':          { bg: '#EFF6FF', color: '#1D4ED8', border: '#BFDBFE' },
   }
   const s = map[label] || map['Classified']
   const dot = label === 'Mismatch' || label === 'Needs Review' || label === 'Match'
+  const isProcessing = label === 'Processing'
   return (
     <span className="inline-flex items-center gap-1" style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase', padding: '3px 8px', border: `1px solid ${s.border}`, borderRadius: 3, background: s.bg, color: s.color }}>
       {dot && <span style={{ width: 5, height: 5, borderRadius: '50%', background: label === 'Match' ? green : '#D97706', display: 'inline-block' }} />}
+      {isProcessing && <Spinner size={9} color="#1D4ED8" />}
       {label}
     </span>
   )
@@ -365,7 +403,7 @@ function TopBar({
       <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
         {classifying?.active && (
           <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 600, color: '#1E40AF', background: '#EFF6FF', border: '1px solid #BFDBFE', padding: '3px 9px', borderRadius: 4 }}>
-            <span style={{ width: 8, height: 8, borderRadius: '50%', border: '2px solid #2563EB', borderTopColor: 'transparent', animation: 'spin 0.7s linear infinite', display: 'inline-block' }} />
+            <Spinner size={10} color="#2563EB" />
             AI CLASSIFYING ({classifying.current}/{classifying.total})
           </div>
         )}
@@ -447,7 +485,7 @@ function DashboardPage({
         {/* Initial Fetching Banner */}
         {loading && (
           <div style={{ background: '#F7F5EF', border: `1px solid ${border}`, borderRadius: 4, padding: '12px 18px', marginBottom: 18, display: 'flex', alignItems: 'center', gap: 10 }}>
-            <span style={{ width: 14, height: 14, borderRadius: '50%', border: `2px solid ${navy}`, borderTopColor: 'transparent', animation: 'spin 0.7s linear infinite', display: 'inline-block' }} />
+            <Spinner size={14} color={navy} />
             <span style={{ fontSize: 12, fontWeight: 600, color: navy }}>Retrieving latest shipping emails from Gmail inbox…</span>
           </div>
         )}
@@ -457,7 +495,7 @@ function DashboardPage({
           <div style={{ background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 4, padding: '14px 20px', marginBottom: 18 }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 12, fontWeight: 600, color: '#1E40AF' }}>
-                <span style={{ width: 14, height: 14, borderRadius: '50%', border: '2px solid #2563EB', borderTopColor: 'transparent', animation: 'spin 0.7s linear infinite', display: 'inline-block' }} />
+                <Spinner size={14} color="#2563EB" />
                 AI PIPELINE ACTIVE: Classifying emails with Claude Haiku ({classifying.current} of {classifying.total} analyzed)…
               </div>
               <span style={{ fontSize: 11, fontWeight: 700, color: '#2563EB' }}>
@@ -488,7 +526,7 @@ function DashboardPage({
               <div style={{ padding: '36px 20px', textAlign: 'center', color: muted, fontSize: 13 }}>
                 {loading ? (
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10 }}>
-                    <span style={{ width: 14, height: 14, borderRadius: '50%', border: `2px solid ${navy}`, borderTopColor: 'transparent', animation: 'spin 0.7s linear infinite', display: 'inline-block' }} />
+                    <Spinner size={14} color={navy} />
                     Retrieving emails from inbox…
                   </div>
                 ) : (
@@ -514,8 +552,14 @@ function DashboardPage({
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                       <span style={{ fontSize: 11, color: muted }}>{e.fromName}</span>
-                      <Badge label={e.type} />
-                      {e.type === 'Document Comparison' && <Badge label={e.status} />}
+                      {e.status === 'Processing' ? (
+                        <Badge label="Processing" />
+                      ) : (
+                        <>
+                          <Badge label={e.type} />
+                          {e.type === 'Document Comparison' && <Badge label={e.status} />}
+                        </>
+                      )}
                     </div>
                   </div>
                 </button>
@@ -637,9 +681,17 @@ function EmailRow({ e, onSelect, isLast }: { e: GmailEmail; onSelect: (id: strin
         <div style={{ fontSize: 14, fontWeight: 500, color: ink, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.subject}</div>
         <div style={{ fontSize: 12, color: muted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 2 }}>{e.snippet}</div>
       </td>
-      <td style={{ padding: '14px 16px', whiteSpace: 'nowrap' }}><Badge label={e.type} /></td>
       <td style={{ padding: '14px 16px', whiteSpace: 'nowrap' }}>
-        {e.type === 'Document Comparison' ? <Badge label={e.status} /> : <span style={{ color: faint, fontSize: 13 }}>—</span>}
+        <Badge label={e.status === 'Processing' && e.type === 'General' ? 'Processing' : e.type} />
+      </td>
+      <td style={{ padding: '14px 16px', whiteSpace: 'nowrap' }}>
+        {e.status === 'Processing' ? (
+          <Badge label="Processing" />
+        ) : e.type === 'Document Comparison' ? (
+          <Badge label={e.status} />
+        ) : (
+          <span style={{ color: faint, fontSize: 13 }}>—</span>
+        )}
       </td>
       <td style={{ padding: '14px 16px', fontSize: 12, color: muted, whiteSpace: 'nowrap' }}>{e.date}</td>
     </tr>
@@ -827,7 +879,7 @@ function InboxPage({
         <div style={{ background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 4, padding: '14px 20px', marginBottom: 20 }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 12, fontWeight: 600, color: '#1E40AF' }}>
-              <span style={{ width: 14, height: 14, borderRadius: '50%', border: '2px solid #2563EB', borderTopColor: 'transparent', animation: 'spin 0.7s linear infinite', display: 'inline-block' }} />
+              <Spinner size={14} color="#2563EB" />
               AI CLASSIFICATION IN PROGRESS: Analyzing emails with Claude Haiku ({classifying.current} of {classifying.total} completed)…
             </div>
             <span style={{ fontSize: 11, fontWeight: 700, color: '#2563EB' }}>
@@ -943,7 +995,7 @@ function InboxPage({
               gap: 8,
             }}
           >
-            {loadingMore && <span style={{ width: 12, height: 12, borderRadius: '50%', border: `2px solid ${navy}`, borderTopColor: 'transparent', animation: 'spin 0.7s linear infinite', display: 'inline-block' }} />}
+            {loadingMore && <Spinner size={12} color={navy} />}
             {loadingMore ? 'Loading more emails…' : 'Load More Emails (25)'}
           </button>
         </div>
@@ -1052,7 +1104,7 @@ function ProcessingPage({ onDone }: { onDone: () => void }) {
               {s.done
                 ? <span style={{ width: 18, height: 18, borderRadius: '50%', background: greenBg, border: `1px solid #86EFAC`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, color: green, flexShrink: 0 }}>✓</span>
                 : i === cur
-                  ? <span style={{ width: 18, height: 18, borderRadius: '50%', border: `2px solid ${navy}`, borderTopColor: 'transparent', animation: 'spin 0.7s linear infinite', display: 'inline-block', flexShrink: 0 }} />
+                  ? <Spinner size={18} color={navy} />
                   : <span style={{ width: 18, height: 18, borderRadius: '50%', border: `1px solid ${border}`, flexShrink: 0, display: 'block' }} />
               }
               <span style={{ fontSize: 13, color: s.done ? ink : i === cur ? navy : faint, fontWeight: i === cur ? 600 : 400 }}>{s.label}</span>
@@ -1357,13 +1409,13 @@ function UploadPage({ onCompare }: { onCompare: (result: ComparisonField[], siNa
 
       {parsing && (
         <div style={{ border: `1px solid ${border}`, borderRadius: 4, background: white, padding: '14px 20px', marginBottom: 20, display: 'flex', alignItems: 'center', gap: 10 }}>
-          <span style={{ width: 16, height: 16, borderRadius: '50%', border: `2px solid ${navy}`, borderTopColor: 'transparent', animation: 'spin 0.7s linear infinite', display: 'inline-block' }} />
+          <Spinner size={16} color={navy} />
           <span style={{ fontSize: 13, color: muted }}>Parsing PDF…</span>
         </div>
       )}
       {comparing && (
         <div style={{ border: `1px solid #BFDBFE`, borderRadius: 4, background: '#EFF6FF', padding: '14px 20px', marginBottom: 20, display: 'flex', alignItems: 'center', gap: 10 }}>
-          <span style={{ width: 16, height: 16, borderRadius: '50%', border: `2px solid #2563EB`, borderTopColor: 'transparent', animation: 'spin 0.7s linear infinite', display: 'inline-block' }} />
+          <Spinner size={16} color="#2563EB" />
           <span style={{ fontSize: 13, color: '#1E40AF', fontWeight: 600 }}>Comparing documents with AI backend (extracting & verifying 7 shipment fields)…</span>
         </div>
       )}
@@ -1662,16 +1714,45 @@ export default function App() {
     if (!targets.length) return
     setClassifying({ active: true, current: 0, total: targets.length, error: null })
     setApiError(null)
-    try {
-      const synced = await syncEmailBatchApi(targets)
-      setEmails(prev => {
-        const syncedMap = new Map(synced.map(e => [e.id, e]))
-        const updated = prev.map(e => syncedMap.get(e.id) || e)
-        const existingIds = new Set(prev.map(e => e.id))
-        const newEmails = synced.filter(e => !existingIds.has(e.id))
-        return [...updated, ...newEmails]
+
+    // Mark targets in state with status 'Processing' so the user immediately sees spinner badges
+    setEmails(prev => {
+      const targetIds = new Set(targets.map(t => t.id))
+      return prev.map(e => {
+        if (targetIds.has(e.id)) {
+          return { ...e, status: 'Processing' }
+        }
+        return e
       })
-      setClassifying({ active: false, current: targets.length, total: targets.length, error: null })
+    })
+
+    try {
+      await syncEmailBatchProgressive(
+        targets,
+        (syncedItem, originalItem) => {
+          setClassifying(prev => ({ ...prev, current: prev.current + 1 }))
+          setEmails(prev => {
+            const exists = prev.some(e => e.id === syncedItem.id)
+            if (exists) {
+              return prev.map(e => (e.id === syncedItem.id ? syncedItem : e))
+            } else {
+              return [...prev, syncedItem]
+            }
+          })
+        },
+        (error, originalItem) => {
+          console.error(`Sync failed for email ${originalItem.id}:`, error)
+          const msg = `Backend error on "${originalItem.subject.slice(0, 32)}…": ${error.message}`
+          setClassifying(prev => ({
+            ...prev,
+            current: prev.current + 1,
+            error: msg,
+          }))
+          setApiError(msg)
+        },
+        2
+      )
+      setClassifying(prev => ({ ...prev, active: false }))
     } catch (err: any) {
       console.error('Batch sync failed:', err)
       const msg = `Backend Sync Failed: ${err.message || String(err)}`
@@ -1696,7 +1777,19 @@ export default function App() {
       const res = await fetchEmailsPage(t, undefined, 25)
       setNextPageToken(res.nextPageToken || null)
 
-      // 3. Sync to SQLite (only classifies unclassified messages at 0 token cost for existing)
+      // Immediately merge newly fetched emails into state so user sees them right away
+      setEmails(prev => {
+        const existingMap = new Map(prev.map(e => [e.id, e]))
+        const combined = [...prev]
+        for (const item of res.emails) {
+          if (!existingMap.has(item.id)) {
+            combined.push(item)
+          }
+        }
+        return combined
+      })
+
+      // 3. Sync to SQLite progressively (only classifies unclassified messages at 0 token cost for existing)
       await syncEmailsWithBackend(res.emails)
     } catch (err: any) {
       setApiError(`Failed to fetch emails: ${err.message || String(err)}`)
@@ -1712,6 +1805,19 @@ export default function App() {
     try {
       const res = await fetchEmailsPage(token, nextPageToken, 25)
       setNextPageToken(res.nextPageToken || null)
+
+      // Immediately merge newly fetched emails into state
+      setEmails(prev => {
+        const existingMap = new Map(prev.map(e => [e.id, e]))
+        const combined = [...prev]
+        for (const item of res.emails) {
+          if (!existingMap.has(item.id)) {
+            combined.push(item)
+          }
+        }
+        return combined
+      })
+
       await syncEmailsWithBackend(res.emails)
     } catch (err: any) {
       setApiError(`Failed to load more emails: ${err.message || String(err)}`)

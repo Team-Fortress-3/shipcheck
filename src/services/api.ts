@@ -101,6 +101,7 @@ export function mapGmailEmailToCreatePayload(email: {
   hasAttachments: boolean
   body?: string
 }): any {
+  const isUnclassified = email.status === 'Processing' || !email.type || email.type === 'General'
   return {
     id: email.id,
     thread_id: email.threadId,
@@ -110,9 +111,10 @@ export function mapGmailEmailToCreatePayload(email: {
     snippet: email.snippet,
     date_str: email.date,
     timestamp: email.timestamp,
-    email_type: email.type,
-    status: email.status,
+    email_type: isUnclassified ? undefined : email.type,
+    status: isUnclassified ? undefined : email.status,
     has_attachments: email.hasAttachments,
+    body: email.body || email.snippet,
     body_snippet: email.body ? email.body.slice(0, 1000) : email.snippet,
   }
 }
@@ -312,6 +314,37 @@ export async function syncEmailBatchApi(emails: any[]): Promise<any[]> {
 
   const data = await res.json()
   return (data || []).map(mapEmailRecordToGmailEmail)
+}
+
+/**
+ * Progressive batch sync to backend SQLite cache with bounded concurrency.
+ * Calls onItemDone for each completed item so the UI updates in real time.
+ */
+export async function syncEmailBatchProgressive<T extends { id: string }>(
+  items: T[],
+  onItemDone: (syncedItem: any, originalItem: T) => void,
+  onItemFailed: (error: Error, originalItem: T) => void,
+  concurrency = 2
+): Promise<void> {
+  let nextIndex = 0
+
+  async function worker() {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex++
+      const item = items[currentIndex]
+      try {
+        const syncedList = await syncEmailBatchApi([item])
+        const syncedItem = syncedList[0] || item
+        onItemDone(syncedItem, item)
+      } catch (err) {
+        onItemFailed(err instanceof Error ? err : new Error(String(err)), item)
+      }
+    }
+  }
+
+  const workerCount = Math.min(concurrency, items.length)
+  const workers = Array.from({ length: workerCount }, () => worker())
+  await Promise.all(workers)
 }
 
 /**
