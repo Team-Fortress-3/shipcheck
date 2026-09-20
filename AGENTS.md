@@ -71,13 +71,18 @@ Routing is handled within `src/app/App.tsx` via the `Page` union type without ex
   - Decodes base64 body content (both plain text and multi-part MIME trees).
   - Triggers asynchronous batch classification via the FastAPI backend (`POST /api/classify`) with bounded concurrency and real-time progress reporting.
 
-### 3. FastAPI AI Backend Integration (`email-extract-compare`)
+### 3. FastAPI AI Backend & SQLite Database Integration (`email-extract-compare`)
 - **Proxy Configuration**: `vite.config.ts` proxies `/api` requests to `http://localhost:8000`.
+- **Database & Cache Architecture**:
+  - `GET /api/emails`: Instant cache-first retrieval (<10ms) of previously classified emails from `shipcheck.db`.
+  - `POST /api/emails/batch`: Intelligent caching layer—checks SQLite by message ID; returns existing records at **0 LLM token cost** and only classifies new unclassified messages.
+  - `POST /api/compare`: Multipart upload comparing SI and BL; saves results into `ComparisonRecord` and returns `comparison_id`.
+  - `GET /api/comparisons`: Fetches historical comparison records for review and operational reporting.
 - **Service Layer (`src/services/api.ts`)**:
-  - `checkBackendHealth()`: `GET /api/health`
-  - `classifyEmailApi(req)`: `POST /api/classify` (uses OpenRouter / Claude Haiku)
-  - `compareFilesApi(siFile, blFile)`: `POST /api/compare` (multipart file upload for 7-field AI extraction and comparison)
-  - `classifyEmailsBatch(...)`: Concurrency-controlled runner (pool size: 2) updating UI reactively.
+  - `getCachedEmailsApi(...)`: Instant cache-first retrieval.
+  - `syncEmailBatchApi(...)`: Zero-token batch sync to SQLite.
+  - `compareFilesApi(...)`: AI file comparison with persistent report storage.
+  - `getComparisonsApi(...)`: Comparison history retrieval.
 - **Strict Error Handling Protocol**:
   - **No silent fallback to client-side heuristics**: If the backend is down or an endpoint returns an error, the application displays an explicit error alert banner to the user (`AI Backend Error: ...`) and sets error indicators in the TopBar and Inbox.
 
