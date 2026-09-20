@@ -14,6 +14,9 @@ than guessing.
 import os
 import anthropic
 
+from dotenv import load_dotenv
+load_dotenv()
+
 MODEL = "claude-haiku-4-5-20251001"
 VISION_MODEL = "claude-sonnet-5"
 
