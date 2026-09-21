@@ -3,19 +3,23 @@ Inbox caching and batch email routes for ShipCheck.
 Provides instant (<10ms) loading from SQLite and intelligent caching.
 """
 import asyncio
+import hashlib
 import logging
 from concurrent.futures import ThreadPoolExecutor
+from email.utils import parseaddr
 from typing import List, Optional
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from sqlalchemy.exc import IntegrityError
-from sqlmodel import Session, select
+from sqlmodel import Session, select, or_
 from api.db import get_session
 from api.models import EmailRecord, utc_now
 from api.schemas import EmailRecordCreate
 from api.routes.classify import classify_text_heuristic
 from api.adapter import build_classify_response, map_category_to_email_type
 from api.auth import get_current_user_id
+from api.comparison_service import run_comparison_for_attachments
 from core.classifier import EmailClassifier
+from core.parse_eml import parse_eml
 
 logger = logging.getLogger(__name__)
 
@@ -23,9 +27,11 @@ router = APIRouter(prefix="/emails", tags=["Emails"])
 _classifier = EmailClassifier()
 
 # Shared thread pool for running the blocking classify() calls concurrently
-# without blocking FastAPI's event loop. Reused across requests rather than
-# created fresh each time. Lower this if you see rate-limit (429) errors.
-_classify_executor = ThreadPoolExecutor(max_workers=8)
+# without blocking FastAPI's event loop. Reused across requests (and shared
+# across all concurrent /api/emails/batch calls, not one pool per request)
+# rather than created fresh each time. Lower this if you see rate-limit
+# (429) errors from OpenRouter.
+_classify_executor = ThreadPoolExecutor(max_workers=20)
 
 
 def _classify_sync(item: EmailRecordCreate):
@@ -65,7 +71,9 @@ async def get_emails(
     Allows the frontend to load inbox instantly (<10ms) without hitting Gmail or LLMs.
     """
     stmt = select(EmailRecord)
-    if user_id:
+    if user_id == "demo":
+        stmt = stmt.where(or_(EmailRecord.user_id == user_id, EmailRecord.user_id.is_(None)))
+    elif user_id:
         stmt = stmt.where(EmailRecord.user_id == user_id)
     if email_type:
         stmt = stmt.where(EmailRecord.email_type == email_type)
@@ -95,7 +103,9 @@ async def batch_sync_emails(
     # 1. Fetch all existing records for this user in one query
     email_ids = [e.id for e in emails]
     stmt = select(EmailRecord).where(EmailRecord.id.in_(email_ids))
-    if user_id:
+    if user_id == "demo":
+        stmt = stmt.where(or_(EmailRecord.user_id == user_id, EmailRecord.user_id.is_(None)))
+    elif user_id:
         stmt = stmt.where(EmailRecord.user_id == user_id)
     existing_records = {rec.id: rec for rec in session.exec(stmt).all()}
 
@@ -187,3 +197,82 @@ async def batch_sync_emails(
 
     # Return in the same order the request came in, per this endpoint's contract
     return [results_by_id[item.id] for item in emails if item.id in results_by_id]
+
+
+@router.post("/eml", response_model=EmailRecord, summary="Upload a raw .eml file into the inbox")
+async def upload_eml(
+    file: UploadFile = File(..., description="Raw .eml email file"),
+    user_id: Optional[str] = Depends(get_current_user_id),
+    session: Session = Depends(get_session),
+) -> EmailRecord:
+    """
+    Parses an uploaded .eml file, classifies it, adds it to the inbox cache
+    exactly like a synced Gmail message, and — if it's a Document Comparison
+    with 2+ attachments — immediately runs the SI/BL auto-compare pipeline.
+    """
+    raw = await file.read()
+    parsed = parse_eml(raw)
+
+    # No Gmail message id for an uploaded file - derive a stable one from
+    # content so re-uploading the same .eml is idempotent (matches the
+    # merge-on-existing-id behavior of /emails/batch).
+    email_id = "eml_" + hashlib.sha256(raw).hexdigest()[:24]
+
+    from_name, from_email = parseaddr(parsed["from"])
+    from_name = from_name or from_email or "Unknown Sender"
+    subject = parsed["subject"] or "(no subject)"
+    body = parsed["body"] or ""
+    has_attachments = len(parsed["attachments"]) > 0
+
+    item = EmailRecordCreate(
+        id=email_id,
+        thread_id=email_id,
+        from_name=from_name,
+        from_email=from_email,
+        subject=subject,
+        snippet=body[:200],
+        date_str="Uploaded",
+        timestamp=int(utc_now().timestamp() * 1000),
+        has_attachments=has_attachments,
+        body=body,
+        body_snippet=body[:200],
+        user_id=user_id,
+    )
+
+    existing = session.get(EmailRecord, email_id)
+    if existing and existing.status and existing.status != "Processing":
+        return existing
+
+    loop = asyncio.get_event_loop()
+    _, classify_resp = await loop.run_in_executor(_classify_executor, _classify_sync, item)
+    email_type = classify_resp.type
+    status = "New" if email_type == "Document Comparison" else "Classified"
+
+    rec = EmailRecord(
+        id=email_id,
+        user_id=user_id,
+        thread_id=email_id,
+        from_name=from_name,
+        from_email=from_email,
+        subject=subject,
+        snippet=body[:200],
+        date_str="Uploaded",
+        timestamp=item.timestamp,
+        email_type=email_type,
+        status=status,
+        confidence=classify_resp.confidence,
+        reasoning=classify_resp.reasoning,
+        has_attachments=has_attachments,
+        body_snippet=body[:200],
+        created_at=utc_now(),
+        updated_at=utc_now(),
+    )
+    rec = session.merge(rec)
+    session.commit()
+    session.refresh(rec)
+
+    if email_type == "Document Comparison" and len(parsed["attachments"]) >= 2:
+        run_comparison_for_attachments(session, parsed["attachments"], email_id, user_id)
+        session.refresh(rec)
+
+    return rec

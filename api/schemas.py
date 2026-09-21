@@ -87,9 +87,11 @@ class ComparisonRecordRead(BaseModel):
 
 
 class ComparisonReviewUpdate(BaseModel):
-    """Payload to mark a comparison as reviewed."""
+    """Payload to mark a comparison as reviewed, optionally overriding its status
+    (e.g. a human resolving a "Needs Review" case to Match/Mismatch)."""
     reviewed: bool = True
     reviewed_by: Optional[str] = None
+    status: Optional[EmailStatus] = None
 
 
 class HealthResponse(BaseModel):

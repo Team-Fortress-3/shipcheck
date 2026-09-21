@@ -120,6 +120,62 @@ class TestSQLitePersistence(unittest.TestCase):
             # Call count should STILL be 2 (no redundant LLM calls)
             self.assertEqual(mock_classify.call_count, 2)
 
+    def test_eml_upload_creates_email_and_autocompares(self):
+        """
+        Verifies POST /api/emails/eml parses a raw .eml, classifies it, persists
+        an EmailRecord, and - since it's a Document Comparison with 2 attachments -
+        auto-runs the SI/BL comparison and links a ComparisonRecord.
+        """
+        from email.message import EmailMessage as PyEmailMessage
+
+        msg = PyEmailMessage()
+        msg["From"] = "Jane Shipper <jane@shipperco.com>"
+        msg["Subject"] = "SI and draft BL for review"
+        msg.set_content("Please compare the attached SI and draft BL.")
+        msg.add_attachment(
+            b"SHIPPING INSTRUCTION\nShipper: Alpha Corp",
+            maintype="text", subtype="plain", filename="doc_si.txt",
+        )
+        msg.add_attachment(
+            b"BILL OF LADING\nShipper: Alpha Corp",
+            maintype="text", subtype="plain", filename="doc_bl.txt",
+        )
+        raw = msg.as_bytes()
+
+        mock_si_fields = {
+            "shipper": "Alpha Corp", "consignee": "Beta LLC", "notify_party": "Gamma Inc",
+            "port_of_loading": "SINGAPORE", "port_of_discharge": "ROTTERDAM",
+            "container_count": "2 x 40'HC", "gross_weight_kg": 25000,
+        }
+        mock_bl_fields = dict(mock_si_fields)
+
+        # SI/BL attachments extract concurrently (see core/check_email.py
+        # identify_si_bl), so key the mock off filename, not call order.
+        def fake_extract(filename, raw_bytes):
+            return (mock_si_fields, "text") if "si" in filename else (mock_bl_fields, "text")
+
+        with patch("api.routes.emails._classifier.classify") as mock_classify, \
+             patch("api.comparison_service.extractor.extract_from_bytes", side_effect=fake_extract):
+            mock_classify.return_value = ClassificationResult(category="BL_COMPARISON", confidence=0.96)
+
+            response = self.client.post(
+                "/api/emails/eml",
+                files={"file": ("test.eml", raw, "message/rfc822")},
+            )
+            self.assertEqual(response.status_code, 200)
+            data = response.json()
+            self.assertEqual(data["email_type"], "Document Comparison")
+            self.assertEqual(data["status"], "Match")  # auto-compare ran and matched
+            self.assertTrue(data["has_attachments"])
+            self.assertEqual(data["from_email"], "jane@shipperco.com")
+
+            with Session(self.test_engine) as session:
+                comps = session.exec(
+                    select(ComparisonRecord).where(ComparisonRecord.email_id == data["id"])
+                ).all()
+                self.assertEqual(len(comps), 1)
+                self.assertEqual(comps[0].status, "Match")
+
     def test_batch_sync_caching_per_user(self):
         """
         Verifies:
@@ -306,6 +362,44 @@ class TestSQLitePersistence(unittest.TestCase):
         review_data = review_resp.json()
         self.assertTrue(review_data["reviewed"])
         self.assertEqual(review_data["reviewed_by"], "Senior Officer")
+
+    def test_review_status_override_updates_linked_email(self):
+        """
+        Verifies a human reviewer resolving a "Needs Review" comparison with an
+        explicit status override updates both the ComparisonRecord and the
+        linked EmailRecord, so the resolution persists (not just local state).
+        """
+        with Session(self.test_engine) as session:
+            session.add(EmailRecord(
+                id="email_needs_review", thread_id="th2", from_name="Ops", from_email="ops@ship.com",
+                subject="Ambiguous SI vs BL", snippet="Please check", date_str="Today", timestamp=600,
+                email_type="Document Comparison", status="Needs Review",
+            ))
+            session.add(ComparisonRecord(
+                email_id="email_needs_review", si_name="si.pdf", bl_name="bl.pdf",
+                status="Needs Review", summary="Could not confidently identify SI/BL.",
+                fields_json="[]", reviewed=False,
+            ))
+            session.commit()
+            comp_id = session.exec(
+                select(ComparisonRecord).where(ComparisonRecord.email_id == "email_needs_review")
+            ).one().id
+
+        review_resp = self.client.patch(
+            f"/api/comparisons/{comp_id}/review",
+            json={"reviewed": True, "reviewed_by": "operator@example.com", "status": "Match"}
+        )
+        self.assertEqual(review_resp.status_code, 200)
+        review_data = review_resp.json()
+        self.assertTrue(review_data["reviewed"])
+        self.assertEqual(review_data["status"], "Match")
+
+        with Session(self.test_engine) as session:
+            email_updated = session.get(EmailRecord, "email_needs_review")
+            self.assertEqual(email_updated.status, "Match")
+            comp_updated = session.get(ComparisonRecord, comp_id)
+            self.assertEqual(comp_updated.status, "Match")
+            self.assertTrue(comp_updated.reviewed)
 
 
 if __name__ == "__main__":

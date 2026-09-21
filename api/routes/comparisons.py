@@ -7,7 +7,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlmodel import Session, select
 from api.db import get_session
-from api.models import ComparisonRecord
+from api.models import ComparisonRecord, EmailRecord, utc_now
 from api.schemas import ComparisonRecordRead, ComparisonField, ComparisonReviewUpdate
 from api.auth import get_current_user_id
 
@@ -100,9 +100,20 @@ async def review_comparison(
     rec.reviewed = payload.reviewed
     if payload.reviewed_by is not None:
         rec.reviewed_by = payload.reviewed_by
+    if payload.status is not None:
+        rec.status = payload.status
 
     session.add(rec)
     session.commit()
     session.refresh(rec)
+
+    if payload.status is not None and rec.email_id:
+        email_rec = session.get(EmailRecord, rec.email_id)
+        if email_rec:
+            email_rec.status = payload.status
+            email_rec.updated_at = utc_now()
+            session.add(email_rec)
+            session.commit()
+
     return _to_read_model(rec)
 

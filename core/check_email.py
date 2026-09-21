@@ -13,6 +13,7 @@ Set ANTHROPIC_API_KEY and OPENROUTER_API_KEY before running.
 """
 import json
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -144,6 +145,61 @@ class AttachmentExtractor:
         except ScannedPDF as e:
             image_bytes = render_pdf_page_as_image(e.raw_bytes)
             return extract_fields_from_image(image_bytes), "vision"
+
+
+def _extract_and_classify_role(filename: str, raw: bytes, extractor: "AttachmentExtractor") -> dict:
+    """Runs one attachment through extraction + cheap role-sniffing. Split out
+    from identify_si_bl so independent attachments can be processed on
+    separate threads - extraction is an LLM call and dominates the runtime,
+    so doing SI and BL in parallel roughly halves it."""
+    try:
+        fields, method = extractor.extract_from_bytes(filename, raw)
+    except UnreadableAttachment as e:
+        return {"filename": filename, "error": str(e)}
+
+    try:
+        text = read_attachment_text(filename, raw)
+    except Exception:
+        text = ""
+    header = text[:300].upper()
+
+    if "SHIPPING INSTRUCTION" in header or "_si." in filename.lower() or "_si_" in filename.lower():
+        role = "SI"
+    elif "BILL OF LADING" in header or "_bl." in filename.lower() or "_bl_" in filename.lower():
+        role = "BL"
+    else:
+        role = None
+
+    return {"filename": filename, "fields": fields, "method": method, "role": role}
+
+
+def identify_si_bl(
+    attachments: list[tuple[str, bytes]], extractor: "AttachmentExtractor"
+) -> tuple[dict, dict] | None:
+    """Given a list of (filename, raw_bytes) attachments, figures out which
+    one is the SI and which is the BL by reading their content (real emails
+    won't reliably have '_SI'/'_BL' in the filename). Returns (si_info,
+    bl_info) or None if it can't confidently tell, where each info dict has
+    filename/fields/method/role (or filename/error for unreadable ones).
+
+    Detection: look for "SHIPPING INSTRUCTION" or "BILL OF LADING" near the
+    top of the extracted text. Falls back to filename hints if content is
+    ambiguous. Attachments are extracted concurrently (each involves an LLM
+    call) rather than one at a time.
+    """
+    if len(attachments) <= 1:
+        docs = [_extract_and_classify_role(f, raw, extractor) for f, raw in attachments]
+    else:
+        with ThreadPoolExecutor(max_workers=min(len(attachments), 8)) as pool:
+            docs = list(pool.map(lambda item: _extract_and_classify_role(item[0], item[1], extractor), attachments))
+
+    identified = [d for d in docs if d.get("role") in ("SI", "BL")]
+    si = next((d for d in identified if d["role"] == "SI"), None)
+    bl = next((d for d in identified if d["role"] == "BL"), None)
+
+    if si and bl:
+        return si, bl
+    return None  # couldn't confidently identify both roles
 
 
 class EmailVerificationPipeline:

@@ -141,6 +141,53 @@ class TestFastAPIEndpoints(unittest.TestCase):
             self.assertEqual(data["status"], "Match")
             self.assertTrue(all(f["match"] for f in data["fields"]))
 
+    def test_compare_email_attachments_endpoint(self):
+        """Verifies /api/compare/email auto-identifies SI/BL among attachments and compares them."""
+        mock_si = {
+            "shipper": "Alpha Corp",
+            "consignee": "Beta LLC",
+            "notify_party": "Gamma Inc",
+            "port_of_loading": "SINGAPORE",
+            "port_of_discharge": "ROTTERDAM",
+            "container_count": "2 x 40'HC",
+            "gross_weight_kg": 25000,
+        }
+        mock_bl = dict(mock_si)
+        mock_bl["gross_weight_kg"] = 26000  # mismatch
+
+        # SI/BL attachments now extract concurrently (see core/check_email.py
+        # identify_si_bl), so the mock must key off filename rather than call
+        # order - a positional side_effect list would race between threads.
+        def fake_extract(filename, raw_bytes):
+            return (mock_si, "text") if "si" in filename else (mock_bl, "text")
+
+        with patch("api.comparison_service.extractor.extract_from_bytes", side_effect=fake_extract):
+            files = [
+                ("attachments", ("doc_si.txt", b"SHIPPING INSTRUCTION\nfoo", "text/plain")),
+                ("attachments", ("doc_bl.txt", b"BILL OF LADING\nfoo", "text/plain")),
+            ]
+            response = self.client.post(
+                "/api/compare/email",
+                data={"email_id": "msg_auto_1"},
+                files=files,
+            )
+            self.assertEqual(response.status_code, 200)
+            data = response.json()
+            self.assertEqual(data["status"], "Mismatch")
+            self.assertIsNotNone(data["comparison_id"])
+
+    def test_compare_email_attachments_needs_review_when_undersupplied(self):
+        """Fewer than 2 attachments should fall back to Needs Review, not error."""
+        files = [("attachments", ("doc_si.txt", b"SHIPPING INSTRUCTION\nfoo", "text/plain"))]
+        response = self.client.post(
+            "/api/compare/email",
+            data={"email_id": "msg_auto_2"},
+            files=files,
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["status"], "Needs Review")
+
     def test_sync_user_identities_synchronization(self):
         """Verifies /api/auth/sync-user creates auth.users and auth.identities with correct parameters."""
         mock_conn = MagicMock()

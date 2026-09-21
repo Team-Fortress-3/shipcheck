@@ -1,19 +1,22 @@
 """
 Document comparison endpoint router.
-Supports both file uploads (PDF/DOCX/TXT/XLSX) and direct text payloads.
+Supports file uploads (PDF/DOCX/TXT/XLSX), direct text payloads, and
+attachment lists auto-identified as SI/BL (for the inbox auto-compare flow).
 Persists comparison history in SQLite ComparisonRecord table.
 """
-import json
 import logging
-from typing import Optional
+from typing import List, Optional
 from fastapi import APIRouter, Depends, File, Form, UploadFile, HTTPException, status
 from sqlmodel import Session
 from api.db import get_session
-from api.models import ComparisonRecord, EmailRecord, utc_now
 from api.schemas import CompareResponse, CompareTextRequest
 from api.adapter import build_compare_response
-from core.check_email import AttachmentExtractor
-from core.compare_ai import DocumentComparator
+from api.comparison_service import (
+    extractor as _extractor,
+    comparator as _comparator,
+    save_comparison_record as _save_comparison_record,
+    run_comparison_for_attachments,
+)
 from core.extract import extract_fields, FIELDS
 from core.readers.reader import UnreadableAttachment
 
@@ -22,45 +25,6 @@ from api.auth import get_current_user_id
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["Document Comparison"])
-_extractor = AttachmentExtractor()
-_comparator = DocumentComparator()
-
-
-def _save_comparison_record(
-    session: Session,
-    si_name: str,
-    bl_name: str,
-    response: CompareResponse,
-    email_id: Optional[str] = None,
-    user_id: Optional[str] = None,
-) -> int:
-    """Helper to persist ComparisonRecord and update linked EmailRecord if present."""
-    fields_data = [f.model_dump() for f in response.fields]
-    fields_json = json.dumps(fields_data)
-
-    rec = ComparisonRecord(
-        user_id=user_id,
-        email_id=email_id,
-        si_name=si_name,
-        bl_name=bl_name,
-        status=response.status,
-        summary=response.summary,
-        fields_json=fields_json,
-        reviewed=False,
-    )
-    session.add(rec)
-    session.commit()
-    session.refresh(rec)
-
-    if email_id:
-        email_rec = session.get(EmailRecord, email_id)
-        if email_rec:
-            email_rec.status = response.status
-            email_rec.updated_at = utc_now()
-            session.add(email_rec)
-            session.commit()
-
-    return rec.id
 
 
 @router.post("/compare", response_model=CompareResponse, summary="Compare SI vs BL uploaded document files")
@@ -152,4 +116,36 @@ async def compare_documents_text(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Text comparison failed: {err_str}",
+        )
+
+
+@router.post("/compare/email", response_model=CompareResponse, summary="Auto-compare an email's attachments")
+async def compare_email_attachments(
+    email_id: str = Form(..., description="Gmail message ID (or EML-derived ID) to link this comparison to"),
+    attachments: List[UploadFile] = File(default_factory=list, description="All attachments found on the email"),
+    user_id: Optional[str] = Depends(get_current_user_id),
+    session: Session = Depends(get_session),
+) -> CompareResponse:
+    """
+    Identifies the SI and BL among an email's attachments, extracts and
+    compares their fields, and saves the result linked to email_id. Falls
+    back to a "Needs Review" result (not an error) when the attachments
+    can't be confidently resolved into an SI/BL pair.
+    """
+    try:
+        files = [(f.filename or "attachment", await f.read()) for f in attachments]
+        return run_comparison_for_attachments(session, files, email_id, user_id)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error during email attachment comparison: {e}", exc_info=True)
+        err_str = str(e)
+        if "Could not resolve authentication method" in err_str or "ANTHROPIC_API_KEY" in err_str:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="ANTHROPIC_API_KEY is not configured on the backend server.",
+            )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Email attachment comparison failed: {err_str}",
         )
