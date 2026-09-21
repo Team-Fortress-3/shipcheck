@@ -204,7 +204,7 @@ export default function App() {
   // trigger this regardless of who's logged in) and runs the compare
   // pipeline against them. Used both as the automatic post-classify trigger
   // and as the manual "Compare Now" retry button.
-  const compareEmailNow = useCallback(async (email: GmailEmail) => {
+  const compareEmailNow = useCallback(async (email: GmailEmail, opts?: { silent?: boolean }) => {
     setCompareErrors(prev => {
       if (!(email.id in prev)) return prev
       const { [email.id]: _drop, ...rest } = prev
@@ -230,7 +230,14 @@ export default function App() {
       const msg = isTimeout
         ? "This is taking a while - it's likely still finishing on the server. Check back in a moment or try again."
         : (err.message || String(err))
-      setApiError(`Comparison for "${email.subject.slice(0, 40)}": ${msg}`)
+      // Silent (background auto-compare) failures - including transient
+      // network hiccups that survived the backend's own retries - don't
+      // surface as a banner the user never asked about; they're still
+      // tracked per-email below, so opening that email or hitting the
+      // manual "Compare Now" button shows the real feedback.
+      if (!opts?.silent) {
+        setApiError(`Comparison for "${email.subject.slice(0, 40)}": ${msg}`)
+      }
       setCompareErrors(prev => ({ ...prev, [email.id]: msg }))
       return null
     } finally {
@@ -264,7 +271,7 @@ export default function App() {
     )
     if (!candidates.length) return
     candidates.forEach(e => autoCompareAttempted.current.add(e.id))
-    fetchInBatches(candidates, compareEmailNow, 8)
+    fetchInBatches(candidates, e => compareEmailNow(e, { silent: true }), 8)
   }, [emails, compareEmailNow, gmailStatus?.connected])
 
   // Refreshes whether *this* logged-in account has its own Gmail connection
