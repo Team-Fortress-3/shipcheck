@@ -17,6 +17,8 @@ attachments/
 submission.json
 results.xlsx
 *.log
+.sent_emails.json
 
 # OS
 .DS_Store
+start.sh
