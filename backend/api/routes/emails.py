@@ -28,6 +28,7 @@ from api.gmail_service import (
     fetch_message_attachments,
     list_message_attachment_names,
     exchange_auth_code_for_tokens,
+    disconnect_gmail_integration,
     get_refresh_token,
     get_integration_record,
 )
@@ -313,12 +314,13 @@ async def upload_eml(
     return rec
 
 
-@router.get("/gmail-status", response_model=GmailIntegrationStatus, summary="Check server-side Gmail integration status")
+@router.get("/gmail-status", response_model=GmailIntegrationStatus, summary="Check this account's Gmail integration status")
 async def get_gmail_status(
+    user_id: Optional[str] = Depends(get_current_user_id),
     session: Session = Depends(get_session),
 ) -> GmailIntegrationStatus:
-    record = get_integration_record(session)
-    refresh_tok = get_refresh_token(session)
+    record = get_integration_record(session, user_id)
+    refresh_tok = get_refresh_token(session, user_id)
     return GmailIntegrationStatus(
         connected=bool(refresh_tok),
         account_email=record.account_email if record else None,
@@ -326,13 +328,14 @@ async def get_gmail_status(
     )
 
 
-@router.post("/connect-gmail", response_model=GmailIntegrationStatus, summary="Connect server-side Gmail with Google auth code")
+@router.post("/connect-gmail", response_model=GmailIntegrationStatus, summary="Connect this account's own Gmail with a Google auth code")
 async def connect_server_gmail(
     req: GoogleAuthCodeRequest,
+    user_id: Optional[str] = Depends(get_current_user_id),
     session: Session = Depends(get_session),
 ) -> GmailIntegrationStatus:
     try:
-        record = await exchange_auth_code_for_tokens(session, req.code, req.redirect_uri)
+        record = await exchange_auth_code_for_tokens(session, user_id, req.code, req.redirect_uri)
         return GmailIntegrationStatus(
             connected=True,
             account_email=record.account_email,
@@ -342,6 +345,15 @@ async def connect_server_gmail(
         logger.error(f"Failed to connect Gmail integration: {e}")
         from fastapi import HTTPException
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/disconnect-gmail", response_model=GmailIntegrationStatus, summary="Disconnect this account's own Gmail integration")
+async def disconnect_server_gmail(
+    user_id: Optional[str] = Depends(get_current_user_id),
+    session: Session = Depends(get_session),
+) -> GmailIntegrationStatus:
+    disconnect_gmail_integration(session, user_id)
+    return GmailIntegrationStatus(connected=False, account_email=None, last_sync_at=None)
 
 
 @router.post("/sync", response_model=EmailSyncResponse, summary="Sync latest messages from Gmail via server token")
@@ -358,6 +370,7 @@ async def sync_gmail_inbox(
     try:
         raw_items, next_page = await fetch_gmail_inbox_messages(
             session=session,
+            user_id=user_id,
             page_token=req.page_token,
             max_results=req.max_results,
         )
@@ -397,13 +410,14 @@ async def sync_gmail_inbox(
 @router.get("/{email_id}/attachments", response_model=EmailAttachmentsResponse, summary="List a Gmail message's attachment filenames")
 async def list_email_attachments(
     email_id: str,
+    user_id: Optional[str] = Depends(get_current_user_id),
     session: Session = Depends(get_session),
 ) -> EmailAttachmentsResponse:
-    """Lists attachment filenames (not bytes) via the shared server-side Gmail connection."""
+    """Lists attachment filenames (not bytes) via this account's own Gmail connection."""
     if email_id.startswith("eml_"):
         return EmailAttachmentsResponse(filenames=[])
     try:
-        filenames = await list_message_attachment_names(session, email_id)
+        filenames = await list_message_attachment_names(session, user_id, email_id)
         return EmailAttachmentsResponse(filenames=filenames)
     except Exception as e:
         logger.error(f"Failed to list attachments for {email_id} from Gmail: {e}")
@@ -414,13 +428,14 @@ async def list_email_attachments(
 async def download_email_attachment(
     email_id: str,
     filename: str,
+    user_id: Optional[str] = Depends(get_current_user_id),
     session: Session = Depends(get_session),
 ) -> Response:
-    """Downloads a single attachment's raw bytes via the shared server-side Gmail connection."""
+    """Downloads a single attachment's raw bytes via this account's own Gmail connection."""
     if email_id.startswith("eml_"):
         raise HTTPException(status_code=400, detail="This email was uploaded directly - no Gmail attachment to download.")
     try:
-        attachments = await fetch_message_attachments(session, email_id)
+        attachments = await fetch_message_attachments(session, user_id, email_id)
     except Exception as e:
         logger.error(f"Failed to fetch attachment '{filename}' for {email_id} from Gmail: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to fetch attachment from Gmail: {str(e)}")
@@ -453,7 +468,7 @@ async def compare_email_from_gmail(
         from fastapi import HTTPException
         raise HTTPException(status_code=400, detail="This email was uploaded directly, not synced from Gmail - it has no Gmail message to fetch attachments from.")
     try:
-        attachments = await fetch_message_attachments(session, email_id)
+        attachments = await fetch_message_attachments(session, user_id, email_id)
     except Exception as e:
         logger.error(f"Failed to fetch attachments for {email_id} from Gmail: {e}")
         from fastapi import HTTPException

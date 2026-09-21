@@ -61,12 +61,9 @@ async def _gmail_get(client: httpx.AsyncClient, url: str, token: str, params: Op
                 delay *= 2
     return resp
 
-# In-memory token cache fallback if DB is not writable
-_MEM_CACHE: Dict[str, Any] = {
-    "access_token": None,
-    "expires_at": None,
-    "account_email": None,
-}
+# In-memory token cache fallback if DB is not writable, keyed by user_id so
+# one user's cached token can never be handed to another user's request.
+_MEM_CACHE: Dict[str, Dict[str, Any]] = {}
 
 
 def to_utc(dt: Optional[datetime]) -> Optional[datetime]:
@@ -101,31 +98,51 @@ def get_oauth_credentials() -> Tuple[str, str]:
     return client_id, client_secret
 
 
-def get_integration_record(session: Session) -> Optional[EmailIntegration]:
-    """Retrieves the primary EmailIntegration record from the database."""
-    stmt = select(EmailIntegration).where(EmailIntegration.id == "primary")
+def get_integration_record(session: Session, user_id: str) -> Optional[EmailIntegration]:
+    """Retrieves this user's own EmailIntegration record from the database -
+    never another user's, even if one exists."""
+    stmt = select(EmailIntegration).where(EmailIntegration.id == user_id)
     return session.exec(stmt).first()
 
 
-def get_refresh_token(session: Session) -> Optional[str]:
+def disconnect_gmail_integration(session: Session, user_id: str) -> bool:
+    """Removes this user's own Gmail integration record, if one exists.
+    Returns True if a record was actually deleted."""
+    record = get_integration_record(session, user_id)
+    if not record:
+        return False
+    session.delete(record)
+    session.commit()
+    _MEM_CACHE.pop(user_id, None)
+    return True
+
+
+def get_refresh_token(session: Session, user_id: str) -> Optional[str]:
     """
-    Returns the configured refresh token.
-    Prioritizes DB record; falls back to environment variable GMAIL_REFRESH_TOKEN.
+    Returns the configured refresh token for this specific user.
+    Prioritizes their own DB record. Only the "demo" user (the fallback
+    get_current_user_id returns for unauthenticated requests) falls back to
+    the bootstrap GMAIL_REFRESH_TOKEN env var - a real logged-in user who
+    hasn't connected their own Gmail must see "not connected", never
+    silently inherit the shared demo account's inbox.
     """
-    record = get_integration_record(session)
+    record = get_integration_record(session, user_id)
     if record and record.refresh_token:
         return record.refresh_token
-    return os.environ.get("GMAIL_REFRESH_TOKEN")
+    if user_id == "demo":
+        return os.environ.get("GMAIL_REFRESH_TOKEN")
+    return None
 
 
 async def exchange_auth_code_for_tokens(
     session: Session,
+    user_id: str,
     code: str,
     redirect_uri: str = "postmessage",
 ) -> EmailIntegration:
     """
     Exchanges a Google OAuth authorization code for an access token and refresh token,
-    then saves the refresh token to the database.
+    then saves the refresh token to the database under this user's own record.
     """
     client_id, client_secret = get_oauth_credentials()
     payload = {
@@ -150,7 +167,7 @@ async def exchange_auth_code_for_tokens(
 
         if not refresh_token:
             # If Google didn't return a refresh token (e.g. prompt != consent), check if we already have one
-            existing = get_integration_record(session)
+            existing = get_integration_record(session, user_id)
             if existing and existing.refresh_token:
                 refresh_token = existing.refresh_token
             else:
@@ -170,11 +187,11 @@ async def exchange_auth_code_for_tokens(
 
     expires_at = utc_now() + timedelta(seconds=expires_in - 120)
 
-    # Persist into DB
-    record = get_integration_record(session)
+    # Persist into DB, under this user's own record
+    record = get_integration_record(session, user_id)
     if not record:
         record = EmailIntegration(
-            id="primary",
+            id=user_id,
             provider="gmail",
             account_email=account_email,
             refresh_token=refresh_token,
@@ -195,23 +212,21 @@ async def exchange_auth_code_for_tokens(
     session.commit()
     session.refresh(record)
 
-    _MEM_CACHE["access_token"] = access_token
-    _MEM_CACHE["expires_at"] = expires_at
-    _MEM_CACHE["account_email"] = account_email
+    _MEM_CACHE[user_id] = {"access_token": access_token, "expires_at": expires_at, "account_email": account_email}
 
-    logger.info(f"Successfully configured Gmail integration for {account_email or 'account'}")
+    logger.info(f"Successfully configured Gmail integration for user {user_id} ({account_email or 'account'})")
     return record
 
 
-async def get_valid_access_token(session: Session) -> str:
+async def get_valid_access_token(session: Session, user_id: str) -> str:
     """
-    Returns a valid Google OAuth access token.
+    Returns a valid Google OAuth access token for this specific user.
     Uses cached token if still unexpired; otherwise renews via refresh token.
     """
     now = utc_now()
 
     # 1. Check DB record cache
-    record = get_integration_record(session)
+    record = get_integration_record(session, user_id)
     if record and record.access_token and record.access_token_expires_at:
         exp = to_utc(record.access_token_expires_at)
         # Check with 2-minute buffer
@@ -219,16 +234,17 @@ async def get_valid_access_token(session: Session) -> str:
             return record.access_token
 
     # 2. Check memory cache fallback
-    if _MEM_CACHE.get("access_token") and _MEM_CACHE.get("expires_at"):
-        exp = to_utc(_MEM_CACHE["expires_at"])
+    mem = _MEM_CACHE.get(user_id)
+    if mem and mem.get("access_token") and mem.get("expires_at"):
+        exp = to_utc(mem["expires_at"])
         if exp and exp > now + timedelta(minutes=2):
-            return _MEM_CACHE["access_token"]
+            return mem["access_token"]
 
     # 3. Retrieve refresh token
-    refresh_token = get_refresh_token(session)
+    refresh_token = get_refresh_token(session, user_id)
     if not refresh_token:
         raise RuntimeError(
-            "Gmail integration is not configured. Please set GMAIL_REFRESH_TOKEN or connect Gmail from Settings."
+            "Gmail is not connected for this account. Connect it from Settings."
         )
 
     # 4. Exchange refresh token for fresh access token
@@ -268,8 +284,7 @@ async def get_valid_access_token(session: Session) -> str:
             logger.warning(f"Could not persist refreshed access token to DB: {e}")
             session.rollback()
 
-    _MEM_CACHE["access_token"] = new_access_token
-    _MEM_CACHE["expires_at"] = expires_at
+    _MEM_CACHE[user_id] = {"access_token": new_access_token, "expires_at": expires_at}
 
     return new_access_token
 
@@ -366,10 +381,10 @@ def extract_attachment_refs(payload: dict) -> List[Tuple[str, str]]:
     return refs
 
 
-async def list_message_attachment_names(session: Session, message_id: str) -> List[str]:
+async def list_message_attachment_names(session: Session, user_id: str, message_id: str) -> List[str]:
     """Lists a message's attachment filenames without downloading their bytes -
     cheap enough to call just to show what's actually attached in the UI."""
-    token = await get_valid_access_token(session)
+    token = await get_valid_access_token(session, user_id)
     async with httpx.AsyncClient(timeout=15.0) as client:
         msg_resp = await _gmail_get(client, f"{GMAIL_API_BASE}/messages/{message_id}?format=full", token)
         if not msg_resp.is_success:
@@ -378,14 +393,13 @@ async def list_message_attachment_names(session: Session, message_id: str) -> Li
         return [filename for filename, _ in extract_attachment_refs(payload)]
 
 
-async def fetch_message_attachments(session: Session, message_id: str) -> List[Tuple[str, bytes]]:
+async def fetch_message_attachments(session: Session, user_id: str, message_id: str) -> List[Tuple[str, bytes]]:
     """
-    Fetches all attachments for a Gmail message using the server's authorized
-    connection - lets any team member trigger a comparison without needing
-    their own personal Gmail login/token.
+    Fetches all attachments for a Gmail message using this user's own
+    authorized Gmail connection.
     Returns [(filename, raw_bytes), ...].
     """
-    token = await get_valid_access_token(session)
+    token = await get_valid_access_token(session, user_id)
 
     async with httpx.AsyncClient(timeout=25.0) as client:
         msg_resp = await _gmail_get(client, f"{GMAIL_API_BASE}/messages/{message_id}?format=full", token)
@@ -423,14 +437,15 @@ def decode_base64_url_bytes(data_str: str) -> bytes:
 
 async def fetch_gmail_inbox_messages(
     session: Session,
+    user_id: str,
     page_token: Optional[str] = None,
     max_results: int = 25,
 ) -> Tuple[List[dict], Optional[str]]:
     """
-    Fetches a page of inbox messages using the server's authorized Gmail connection.
-    Returns (parsed_email_dicts, next_page_token).
+    Fetches a page of inbox messages using this user's own authorized Gmail
+    connection. Returns (parsed_email_dicts, next_page_token).
     """
-    token = await get_valid_access_token(session)
+    token = await get_valid_access_token(session, user_id)
 
     query_params: Dict[str, Any] = {
         "maxResults": max_results,
@@ -519,7 +534,7 @@ async def fetch_gmail_inbox_messages(
             })
 
     # Update next_page_token on the integration record
-    record = get_integration_record(session)
+    record = get_integration_record(session, user_id)
     if record:
         record.last_sync_at = utc_now()
         record.next_page_token = next_page

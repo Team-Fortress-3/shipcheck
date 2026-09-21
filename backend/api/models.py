@@ -48,8 +48,11 @@ class ComparisonRecord(SQLModel, table=True):
 
 
 class EmailIntegration(SQLModel, table=True):
-    """Stores shared Gmail integration tokens for server-side syncing."""
-    id: str = Field(default="primary", primary_key=True)
+    """Stores per-user Gmail integration tokens for server-side syncing.
+    `id` is the owning Supabase user_id (or "demo" for the unauthenticated/
+    shared demo account) - one Gmail connection per app account, never
+    shared across different logged-in users."""
+    id: str = Field(primary_key=True)
     provider: str = Field(default="gmail")
     account_email: Optional[str] = None
     refresh_token: str

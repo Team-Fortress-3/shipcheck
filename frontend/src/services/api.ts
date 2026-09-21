@@ -331,13 +331,41 @@ export interface GmailIntegrationStatus {
 }
 
 /**
- * Checks whether the shared server-side Gmail connection (one refresh token,
- * used by the whole team) is configured - not tied to this browser session.
+ * Checks whether *this logged-in account* has its own Gmail connection
+ * configured server-side. Each account has its own integration record -
+ * the "demo" fallback account is the only one that shares a bootstrap token.
  */
 export async function getGmailStatusApi(): Promise<GmailIntegrationStatus> {
   const headers = await getAuthHeaders()
   const res = await fetch(`${API_BASE}/api/emails/gmail-status`, { headers })
   if (!res.ok) throw new Error(`Failed to check Gmail status: ${res.status}`)
+  return res.json()
+}
+
+/**
+ * Exchanges a Google OAuth authorization code (from the auth-code flow, not
+ * the implicit/access-token flow) for a refresh token, saved server-side
+ * under this logged-in account's own record.
+ */
+export async function connectGmailApi(code: string, redirectUri = 'postmessage'): Promise<GmailIntegrationStatus> {
+  const headers = await getAuthHeaders({ 'Content-Type': 'application/json' })
+  const res = await fetch(`${API_BASE}/api/emails/connect-gmail`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ code, redirect_uri: redirectUri }),
+  })
+  if (!res.ok) {
+    const detail = await extractErrorDetail(res)
+    throw new Error(`Failed to connect Gmail (${res.status}): ${detail}`)
+  }
+  return res.json()
+}
+
+/** Removes this logged-in account's own Gmail integration. */
+export async function disconnectGmailApi(): Promise<GmailIntegrationStatus> {
+  const headers = await getAuthHeaders()
+  const res = await fetch(`${API_BASE}/api/emails/disconnect-gmail`, { method: 'POST', headers })
+  if (!res.ok) throw new Error(`Failed to disconnect Gmail: ${res.status}`)
   return res.json()
 }
 

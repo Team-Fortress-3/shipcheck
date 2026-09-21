@@ -20,6 +20,8 @@ import {
   uploadEmlApi,
   getComparisonsApi,
   mapEmailRecordToGmailEmail,
+  getGmailStatusApi,
+  type GmailIntegrationStatus,
 } from '../services/api'
 import { fetchInBatches, getUserInfo } from '../services/gmail'
 
@@ -37,7 +39,6 @@ import { UploadPage } from '../pages/UploadPage'
 import { UploadComparisonPage } from '../pages/UploadComparisonPage'
 import { SettingsPage } from '../pages/SettingsPage'
 
-const GMAIL_TOKEN_STORAGE_KEY = 'shipcheck_gmail_token'
 const PAGE_STORAGE_KEY = 'shipcheck_page'
 const SELECTED_EMAIL_STORAGE_KEY = 'shipcheck_selected_email_id'
 const SELECTED_REVIEW_STORAGE_KEY = 'shipcheck_selected_review_id'
@@ -47,14 +48,6 @@ const RESTORABLE_PAGES: Page[] = [
   'dashboard', 'inbox', 'email-detail', 'comparison', 'review',
   'review-detail', 'reports', 'upload', 'upload-comparison', 'settings',
 ]
-
-function readStoredGmailToken(): string | null {
-  try {
-    return sessionStorage.getItem(GMAIL_TOKEN_STORAGE_KEY)
-  } catch {
-    return null
-  }
-}
 
 // Which page/detail-item the user was on survives a refresh via
 // sessionStorage, the same way the Gmail token already does - so reloading
@@ -86,20 +79,7 @@ function readStoredUploadResult(): { fields: ComparisonField[]; siName: string; 
 }
 
 export default function App() {
-  // The Google OAuth access token only lives ~1hr and has no refresh token
-  // (implicit flow, no backend token exchange) - but persisting it to
-  // sessionStorage at least survives a page reload within the same tab,
-  // instead of silently losing Gmail connectivity on every refresh.
-  const [gmailToken, setGmailTokenState] = useState<string | null>(readStoredGmailToken)
-  const setGmailToken = useCallback((token: string | null) => {
-    setGmailTokenState(token)
-    try {
-      if (token) sessionStorage.setItem(GMAIL_TOKEN_STORAGE_KEY, token)
-      else sessionStorage.removeItem(GMAIL_TOKEN_STORAGE_KEY)
-    } catch {
-      // sessionStorage unavailable (private mode, etc.) - token just won't survive reloads
-    }
-  }, [])
+  const [gmailStatus, setGmailStatus] = useState<GmailIntegrationStatus | null>(null)
   const [user, setUser] = useState<UserInfo | null>(null)
   const [emails, setEmails] = useState<GmailEmail[]>([])
   const emailsRef = useRef<GmailEmail[]>(emails)
@@ -189,9 +169,10 @@ export default function App() {
         // Unblock auth checking immediately if a user is found so the skeleton layout renders
         if (activeUser) {
           setAuthChecking(false)
-          // Any authenticated user can sync the shared inbox now - it goes
-          // through the backend's own Gmail connection, not this browser's.
+          // Inbox sync goes through this account's own server-side Gmail
+          // connection now, not this browser's.
           loadGmailEmails()
+          refreshGmailStatus()
         } else {
           setAuthChecking(false)
         }
@@ -281,12 +262,23 @@ export default function App() {
     fetchInBatches(candidates, compareEmailNow, 8)
   }, [emails, compareEmailNow])
 
-  // Loads the shared inbox: instant cache read, then a live sync via the
-  // backend's shared server-side Gmail connection (one team refresh token -
-  // works the same for every team member, regardless of whose browser this
-  // is or whether they've ever personally logged into Gmail here).
-  // Classification happens server-side as part of the sync itself, so the
-  // returned records already have real email_type/status.
+  // Refreshes whether *this* logged-in account has its own Gmail connection
+  // configured server-side (each account has its own integration record now
+  // - see Settings / connectGmailApi).
+  const refreshGmailStatus = useCallback(async () => {
+    try {
+      setGmailStatus(await getGmailStatusApi())
+    } catch (err) {
+      console.warn('Gmail status check failed:', err)
+    }
+  }, [])
+
+  // Loads the inbox: instant cache read, then a live sync via this
+  // account's own server-side Gmail connection (the "demo" fallback account
+  // is the only one that shares a bootstrap token - a real logged-in user
+  // without their own connection just gets "not connected", never someone
+  // else's inbox). Classification happens server-side as part of the sync
+  // itself, so the returned records already have real email_type/status.
   const loadGmailEmails = useCallback(async (): Promise<{ ok: boolean; newCount: number }> => {
     setLoading(true)
     setApiError(null)
@@ -365,7 +357,10 @@ export default function App() {
 
   // Handlers
   async function handleGoogleLogin(t: string) {
-    setGmailToken(t)
+    // `t` is only used to read this Google user's profile for display and
+    // to link/create their Supabase account below - it's not used for Gmail
+    // API access, which is a separate, explicit per-account connection now
+    // (see Settings page / connectGmailApi).
     setPage('dashboard')
     setLoading(true)
     let u: UserInfo = { email: 'user@gmail.com', name: 'Google User', provider: 'google' }
@@ -397,12 +392,14 @@ export default function App() {
     }
 
     loadGmailEmails()
+    refreshGmailStatus()
   }
 
   function handleSupabaseLogin(userInfo: UserInfo) {
     setUser(userInfo)
     setPage('dashboard')
     loadGmailEmails()
+    refreshGmailStatus()
   }
 
   async function handleLogout() {
@@ -413,7 +410,7 @@ export default function App() {
     }
     clearSupabaseCustomToken()
     setUser(null)
-    setGmailToken(null)
+    setGmailStatus(null)
     setEmails([])
     setNextPageToken(null)
     setPage('dashboard')
@@ -560,7 +557,7 @@ export default function App() {
               email={selectedEmail}
               onBack={() => setPage('inbox')}
               isComparing={comparingIds.has(selectedEmail.id)}
-              gmailConnected={true}
+              gmailConnected={!!gmailStatus?.connected}
               onGoToSettings={() => setPage('settings')}
               compareError={compareErrors[selectedEmail.id] || null}
               onProcess={async () => {
@@ -626,13 +623,8 @@ export default function App() {
           {page === 'settings' && (
             <SettingsPage
               user={user}
-              gmailToken={gmailToken}
-              onConnectGmail={t => {
-                setGmailToken(t)
-              }}
-              onDisconnectGmail={() => {
-                setGmailToken(null)
-              }}
+              gmailStatus={gmailStatus}
+              onGmailStatusChange={setGmailStatus}
               onLogout={handleLogout}
             />
           )}

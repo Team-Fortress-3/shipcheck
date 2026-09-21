@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { useGoogleLogin } from '@react-oauth/google'
 import type { UserInfo } from '../types'
 import {
@@ -11,28 +12,59 @@ import {
   green,
   greenBg,
 } from '../constants/tokens'
-import { SectionLabel, GoogleIcon, LogoutIcon } from '../components/primitives'
+import { SectionLabel, GoogleIcon, LogoutIcon, Spinner } from '../components/primitives'
+import { connectGmailApi, disconnectGmailApi, type GmailIntegrationStatus } from '../services/api'
 
 interface SettingsPageProps {
   user: UserInfo | null
-  gmailToken: string | null
-  onConnectGmail: (token: string) => void
-  onDisconnectGmail: () => void
+  gmailStatus: GmailIntegrationStatus | null
+  onGmailStatusChange: (status: GmailIntegrationStatus) => void
   onLogout: () => void
 }
 
 export function SettingsPage({
   user,
-  gmailToken,
-  onConnectGmail,
-  onDisconnectGmail,
+  gmailStatus,
+  onGmailStatusChange,
   onLogout,
 }: SettingsPageProps) {
+  const [connecting, setConnecting] = useState(false)
+  const [disconnecting, setDisconnecting] = useState(false)
+  const [gmailError, setGmailError] = useState<string | null>(null)
+
   const googleLogin = useGoogleLogin({
+    flow: 'auth-code',
     scope: 'https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile',
-    onSuccess: res => onConnectGmail(res.access_token),
-    onError: err => console.error('Gmail connection failed', err),
+    onSuccess: async res => {
+      setConnecting(true)
+      setGmailError(null)
+      try {
+        const status = await connectGmailApi(res.code)
+        onGmailStatusChange(status)
+      } catch (err: any) {
+        setGmailError(err.message || 'Failed to connect Gmail.')
+      } finally {
+        setConnecting(false)
+      }
+    },
+    onError: err => {
+      console.error('Gmail connection failed', err)
+      setGmailError('Google sign-in was cancelled or failed.')
+    },
   })
+
+  async function handleDisconnect() {
+    setDisconnecting(true)
+    setGmailError(null)
+    try {
+      const status = await disconnectGmailApi()
+      onGmailStatusChange(status)
+    } catch (err: any) {
+      setGmailError(err.message || 'Failed to disconnect Gmail.')
+    } finally {
+      setDisconnecting(false)
+    }
+  }
 
   return (
     <div style={{ padding: 28, flex: 1, maxWidth: 840 }}>
@@ -91,18 +123,28 @@ export function SettingsPage({
           </p>
         </div>
 
-        {gmailToken ? (
+        {gmailError && (
+          <div style={{ border: '1px solid #FECACA', borderRadius: 4, background: '#FEF2F2', padding: '10px 14px', marginBottom: 14, fontSize: 12, color: '#991B1B' }}>
+            ⚠ {gmailError}
+          </div>
+        )}
+
+        {gmailStatus?.connected ? (
           <div style={{ background: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: 4, padding: 16, display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 16 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               <div style={{ width: 10, height: 10, borderRadius: '50%', background: green }} />
               <div>
                 <div style={{ fontSize: 13, fontWeight: 600, color: '#166534' }}>Gmail Inbox Connected</div>
-                <div style={{ fontSize: 11, color: '#15803D' }}>Live inbox sync enabled for shipping operations.</div>
+                <div style={{ fontSize: 11, color: '#15803D' }}>{gmailStatus.account_email || 'Live inbox sync enabled for shipping operations.'}</div>
               </div>
             </div>
             <button
-              onClick={onDisconnectGmail}
+              onClick={handleDisconnect}
+              disabled={disconnecting}
               style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
                 fontSize: 11,
                 fontWeight: 600,
                 color: '#991B1B',
@@ -110,20 +152,23 @@ export function SettingsPage({
                 border: '1px solid #FECACA',
                 borderRadius: 4,
                 padding: '6px 12px',
-                cursor: 'pointer',
+                cursor: disconnecting ? 'not-allowed' : 'pointer',
+                opacity: disconnecting ? 0.6 : 1,
               }}
             >
-              Disconnect Gmail
+              {disconnecting && <Spinner size={11} color="#991B1B" />}
+              {disconnecting ? 'Disconnecting…' : 'Disconnect Gmail'}
             </button>
           </div>
         ) : (
           <div style={{ background: '#FAF8F5', border: `1px solid ${borderLight}`, borderRadius: 4, padding: 18 }}>
             <div style={{ fontSize: 12, color: muted, marginBottom: 14 }}>
-              No Gmail account is currently connected to this session. Your inbox will only contain manually uploaded shipments or cached records until connected.
+              No Gmail account is connected to your account yet. Your inbox will only contain manually uploaded shipments or cached records until you connect it.
             </div>
             <button
               type="button"
               onClick={() => googleLogin()}
+              disabled={connecting}
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',
@@ -135,11 +180,13 @@ export function SettingsPage({
                 borderRadius: 4,
                 fontSize: 12,
                 fontWeight: 600,
-                cursor: 'pointer',
+                cursor: connecting ? 'not-allowed' : 'pointer',
+                opacity: connecting ? 0.6 : 1,
                 boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
               }}
             >
-              <GoogleIcon /> Connect Gmail Account
+              {connecting ? <Spinner size={12} color={ink} /> : <GoogleIcon />}
+              {connecting ? 'Connecting…' : 'Connect Gmail Account'}
             </button>
           </div>
         )}
