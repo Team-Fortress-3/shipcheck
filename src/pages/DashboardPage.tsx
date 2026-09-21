@@ -12,6 +12,8 @@ import {
   amberBg,
   amberBdr,
   green,
+  red,
+  redBg,
 } from '../constants/tokens'
 import { SectionLabel, Badge, Spinner, DashboardSkeleton } from '../components/primitives'
 
@@ -207,7 +209,7 @@ export function DashboardPage({
                   const isMatch = e.status === 'Match'
                   const isMismatch = e.status === 'Mismatch'
                   const isReview = e.status === 'Needs Review'
-                  const outcomeColor = isMatch ? green : isMismatch || isReview ? amber : muted
+                  const outcomeColor = isMatch ? green : isReview ? red : isMismatch ? amber : muted
                   const outcomeIcon = isMatch ? '✓' : isMismatch ? '⚠' : isReview ? '?' : '—'
                   return (
                     <button
@@ -217,7 +219,7 @@ export function DashboardPage({
                       onMouseEnter={ev => (ev.currentTarget as HTMLButtonElement).style.background = surface}
                       onMouseLeave={ev => (ev.currentTarget as HTMLButtonElement).style.background = white}
                     >
-                      <div style={{ width: 24, height: 24, borderRadius: 4, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, background: isMatch ? '#DCFCE7' : isMismatch || isReview ? amberBg : '#F3F4F6', color: outcomeColor }}>
+                      <div style={{ width: 24, height: 24, borderRadius: 4, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, background: isMatch ? '#DCFCE7' : isReview ? redBg : isMismatch ? amberBg : '#F3F4F6', color: outcomeColor }}>
                         {outcomeIcon}
                       </div>
                       <div style={{ flex: 1, minWidth: 0 }}>

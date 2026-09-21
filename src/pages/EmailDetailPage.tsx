@@ -11,16 +11,22 @@ import {
   amberBg,
   amberBdr,
 } from '../constants/tokens'
-import { SectionLabel, Badge } from '../components/primitives'
+import { SectionLabel, Badge, Spinner } from '../components/primitives'
 
 interface EmailDetailPageProps {
   email: GmailEmail
   onBack: () => void
   onProcess: () => void
+  isComparing?: boolean
+  gmailConnected?: boolean
+  onGoToSettings?: () => void
+  compareError?: string | null
 }
 
-export function EmailDetailPage({ email, onBack, onProcess }: EmailDetailPageProps) {
+export function EmailDetailPage({ email, onBack, onProcess, isComparing, gmailConnected, onGoToSettings, compareError }: EmailDetailPageProps) {
   const isDoc = email.type === 'Document Comparison'
+  const isPending = email.status === 'New' || email.status === 'Processing'
+  const needsGmail = isPending && !gmailConnected
   return (
     <div style={{ padding: 28 }}>
       <button onClick={onBack} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color: navy, border: `1px solid ${border}`, background: white, cursor: 'pointer', padding: '7px 14px', borderRadius: 4, marginBottom: 24 }}>← Back to Inbox</button>
@@ -32,8 +38,8 @@ export function EmailDetailPage({ email, onBack, onProcess }: EmailDetailPagePro
           <span style={{ color: muted, fontWeight: 600, fontSize: 11, letterSpacing: '0.1em', textTransform: 'uppercase', paddingTop: 2 }}>Date</span><span style={{ color: ink }}>{email.date}</span>
         </div>
         <div style={{ display: 'flex', gap: 6, paddingTop: 12, borderTop: `1px solid ${borderLight}` }}>
-          <Badge label={email.type} />
-          {isDoc && <Badge label={email.status} />}
+          <Badge label={email.status === 'Processing' ? 'Processing' : email.type} />
+          {isDoc && email.status !== 'Processing' && <Badge label={email.status} />}
         </div>
       </div>
 
@@ -58,14 +64,42 @@ export function EmailDetailPage({ email, onBack, onProcess }: EmailDetailPagePro
       )}
 
       {isDoc ? (
-        <div style={{ border: `1px solid ${border}`, borderRadius: 4, background: '#EEF2FF', padding: '16px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <div>
-            <div style={{ fontSize: 13, fontWeight: 700, color: '#1E1B4B' }}>Compare SI vs Bill of Lading</div>
-            <div style={{ fontSize: 11, color: '#3730A3', marginTop: 2 }}>Analyse 7 fields and surface discrepancies</div>
+        <>
+          {compareError && (
+            <div style={{ border: '1px solid #FECACA', borderRadius: 4, background: '#FEF2F2', padding: '12px 16px', marginBottom: 12, fontSize: 12, color: '#991B1B' }}>
+              ⚠ {compareError}
+            </div>
+          )}
+          <div style={{ border: `1px solid ${border}`, borderRadius: 4, background: '#EEF2FF', padding: '16px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: '#1E1B4B' }}>Compare SI vs Bill of Lading</div>
+              <div style={{ fontSize: 11, color: '#3730A3', marginTop: 2 }}>
+                {isComparing
+                  ? 'Extracting and comparing attachments…'
+                  : needsGmail
+                  ? 'Gmail is not connected in this session - reconnect it to fetch this email\'s attachments.'
+                  : 'Analyse 7 fields and surface discrepancies'}
+              </div>
+            </div>
+            {isComparing ? (
+              <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 12, fontWeight: 600, color: '#3730A3' }}>
+                <Spinner size={14} color="#3730A3" /> Comparing…
+              </div>
+            ) : needsGmail ? (
+              <button onClick={onGoToSettings} style={{ fontSize: 12, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', padding: '10px 20px', background: navy, color: white, border: 'none', borderRadius: 4, cursor: onGoToSettings ? 'pointer' : 'not-allowed' }}>
+                Connect Gmail
+              </button>
+            ) : (
+              <button onClick={onProcess} style={{ fontSize: 12, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', padding: '10px 20px', background: navy, color: white, border: 'none', borderRadius: 4, cursor: 'pointer' }}>
+                {isPending ? 'Compare Now' : 'View Comparison Report'}
+              </button>
+            )}
           </div>
-          <button onClick={onProcess} style={{ fontSize: 12, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', padding: '10px 20px', background: navy, color: white, border: 'none', borderRadius: 4, cursor: 'pointer' }}>
-            Process Documents
-          </button>
+        </>
+      ) : email.status === 'Processing' ? (
+        <div style={{ border: `1px solid ${border}`, borderRadius: 4, background: surface, padding: '16px 24px', display: 'flex', alignItems: 'center', gap: 10 }}>
+          <Spinner size={14} color={navy} />
+          <p style={{ fontSize: 13, color: muted, margin: 0 }}>This email hasn't been classified yet.</p>
         </div>
       ) : (
         <div style={{ border: `1px solid ${borderLight}`, borderRadius: 4, background: surface, padding: '16px 24px' }}>

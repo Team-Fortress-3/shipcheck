@@ -17,6 +17,9 @@ export const amberBg = '#FEF3C7'
 export const amberBdr = '#F6D860'
 export const green = '#166534'
 export const greenBg = '#DCFCE7'
+export const red = '#B91C1C'
+export const redBg = '#FEE2E2'
+export const redBdr = '#FECACA'
 
 // ─── Breadcrumbs ──────────────────────────────────────────────────────────────
 

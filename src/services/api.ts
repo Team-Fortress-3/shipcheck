@@ -245,6 +245,79 @@ export async function compareFilesApi(siFile: File, blFile: File): Promise<Compa
 }
 
 /**
+ * Auto-compares an email's attachments: identifies the SI and BL among them
+ * server-side, extracts and compares fields, and links the result to email_id.
+ */
+export async function compareEmailAttachmentsApi(emailId: string, files: File[]): Promise<CompareResponse> {
+  const formData = new FormData()
+  formData.append('email_id', emailId)
+  for (const f of files) formData.append('attachments', f)
+
+  let res: Response
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 45000)
+  try {
+    const headers = await getAuthHeaders()
+    res = await fetch(`${API_BASE}/api/compare/email`, {
+      method: 'POST',
+      headers,
+      body: formData,
+      signal: controller.signal,
+    })
+  } catch (err: any) {
+    if (err?.name === 'AbortError') {
+      throw new Error('Email attachment comparison timed out after 45s.')
+    }
+    throw new Error('FastAPI backend service is offline. Please verify the backend service is running.')
+  } finally {
+    clearTimeout(timer)
+  }
+
+  if (!res.ok) {
+    const detail = await extractErrorDetail(res)
+    throw new Error(`Email comparison API error (${res.status}): ${detail}`)
+  }
+
+  return res.json()
+}
+
+/**
+ * Uploads a raw .eml file to be parsed, classified, added to the inbox cache,
+ * and (if it's a Document Comparison with 2+ attachments) auto-compared.
+ */
+export async function uploadEmlApi(file: File): Promise<any> {
+  const formData = new FormData()
+  formData.append('file', file)
+
+  let res: Response
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 45000)
+  try {
+    const headers = await getAuthHeaders()
+    res = await fetch(`${API_BASE}/api/emails/eml`, {
+      method: 'POST',
+      headers,
+      body: formData,
+      signal: controller.signal,
+    })
+  } catch (err: any) {
+    if (err?.name === 'AbortError') {
+      throw new Error('EML upload timed out after 45s.')
+    }
+    throw new Error('FastAPI backend service is offline. Please verify the backend service is running.')
+  } finally {
+    clearTimeout(timer)
+  }
+
+  if (!res.ok) {
+    const detail = await extractErrorDetail(res)
+    throw new Error(`EML upload failed (${res.status}): ${detail}`)
+  }
+
+  return res.json()
+}
+
+/**
  * Direct raw-text comparison endpoint.
  */
 export async function compareTextApi(siText: string, blText: string): Promise<CompareResponse> {
@@ -381,32 +454,44 @@ export async function syncEmailBatchApi(emails: any[]): Promise<any[]> {
 }
 
 /**
- * Progressive batch sync to backend SQLite cache with bounded concurrency.
- * Calls onItemDone for each completed item so the UI updates in real time.
+ * Progressive batch sync to backend SQLite cache. Groups items into chunks
+ * (one /api/emails/batch request per chunk, classified concurrently by the
+ * backend's thread pool) and runs several chunks concurrently - this beats
+ * one-request-per-email because it cuts HTTP/auth round-trip overhead while
+ * still letting the backend classify a whole chunk in parallel server-side.
+ * Calls onItemDone/onItemFailed per item as each chunk resolves.
  */
 export async function syncEmailBatchProgressive<T extends { id: string }>(
   items: T[],
   onItemDone: (syncedItem: any, originalItem: T) => void,
   onItemFailed: (error: Error, originalItem: T) => void,
-  concurrency = 2
+  concurrency = 4,
+  batchSize = 5
 ): Promise<void> {
-  let nextIndex = 0
+  const chunks: T[][] = []
+  for (let i = 0; i < items.length; i += batchSize) {
+    chunks.push(items.slice(i, i + batchSize))
+  }
+
+  let nextChunkIndex = 0
 
   async function worker() {
-    while (nextIndex < items.length) {
-      const currentIndex = nextIndex++
-      const item = items[currentIndex]
+    while (nextChunkIndex < chunks.length) {
+      const chunk = chunks[nextChunkIndex++]
       try {
-        const syncedList = await syncEmailBatchApi([item])
-        const syncedItem = syncedList[0] || item
-        onItemDone(syncedItem, item)
+        const syncedList = await syncEmailBatchApi(chunk)
+        const syncedById = new Map(syncedList.map((s: any) => [s.id, s]))
+        for (const item of chunk) {
+          onItemDone(syncedById.get(item.id) || item, item)
+        }
       } catch (err) {
-        onItemFailed(err instanceof Error ? err : new Error(String(err)), item)
+        const error = err instanceof Error ? err : new Error(String(err))
+        for (const item of chunk) onItemFailed(error, item)
       }
     }
   }
 
-  const workerCount = Math.min(concurrency, items.length)
+  const workerCount = Math.min(concurrency, chunks.length)
   const workers = Array.from({ length: workerCount }, () => worker())
   await Promise.all(workers)
 }
@@ -414,9 +499,11 @@ export async function syncEmailBatchProgressive<T extends { id: string }>(
 /**
  * Fetches historical comparison records from Supabase Postgres.
  */
-export async function getComparisonsApi(limit = 50, offset = 0): Promise<ComparisonRecord[]> {
+export async function getComparisonsApi(limit = 50, offset = 0, emailId?: string): Promise<ComparisonRecord[]> {
   const headers = await getAuthHeaders()
-  const res = await fetch(`${API_BASE}/api/comparisons?limit=${limit}&offset=${offset}`, {
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) })
+  if (emailId) params.append('email_id', emailId)
+  const res = await fetch(`${API_BASE}/api/comparisons?${params.toString()}`, {
     headers,
   })
   if (!res.ok) throw new Error(`Failed to fetch comparisons: ${res.status}`)
@@ -433,6 +520,29 @@ export async function getComparisonByIdApi(id: number): Promise<ComparisonRecord
     headers,
   })
   if (!res.ok) throw new Error(`Failed to fetch comparison ${id}: ${res.status}`)
+  const data = await res.json()
+  return parseComparisonRecord(data)
+}
+
+/**
+ * Marks a comparison as reviewed, optionally overriding its status (a human
+ * resolving a "Needs Review" case to Match/Mismatch). Persists server-side -
+ * updates both the ComparisonRecord and its linked EmailRecord.
+ */
+export async function reviewComparisonApi(
+  comparisonId: number,
+  payload: { reviewed: boolean; reviewed_by?: string; status?: EmailStatus }
+): Promise<ComparisonRecord> {
+  const headers = await getAuthHeaders({ 'Content-Type': 'application/json' })
+  const res = await fetch(`${API_BASE}/api/comparisons/${comparisonId}/review`, {
+    method: 'PATCH',
+    headers,
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) {
+    const detail = await extractErrorDetail(res)
+    throw new Error(`Failed to save review (${res.status}): ${detail}`)
+  }
   const data = await res.json()
   return parseComparisonRecord(data)
 }

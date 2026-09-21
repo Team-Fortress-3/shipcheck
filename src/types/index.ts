@@ -13,6 +13,11 @@ export type Page =
   | 'upload-comparison'
   | 'settings'
 
+export interface AttachmentRef {
+  filename: string
+  attachmentId: string
+}
+
 export interface GmailEmail {
   id: string
   threadId: string
@@ -26,6 +31,9 @@ export interface GmailEmail {
   status: EmailStatus
   hasAttachments: boolean
   body?: string
+  attachmentRefs?: AttachmentRef[]
+  comparisonId?: number
+  fields?: ComparisonField[]
 }
 
 export interface UserInfo {

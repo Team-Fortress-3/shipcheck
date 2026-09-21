@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import type { GmailEmail, ClassifyingState } from '../types'
 import {
   surface,
@@ -10,10 +10,14 @@ import {
   muted,
   faint,
   amber,
+  red,
 } from '../constants/tokens'
 import { SectionLabel, Badge, Spinner, SearchIcon, InboxSkeleton } from '../components/primitives'
 
-const CATEGORY_ORDER = ['Document Comparison', 'New SI Request', 'Invoice Query', 'General', 'Spam'] as const
+// 'Processing' isn't a real EmailType - it's a pseudo-group for emails that
+// haven't been classified yet (type defaults to 'General' until classify
+// actually runs), so they don't get lumped in among genuinely-General emails.
+const GROUP_ORDER = ['Processing', 'Document Comparison', 'New SI Request', 'Invoice Query', 'General', 'Spam'] as const
 const ALL_CLASSIFICATIONS = ['Document Comparison', 'New SI Request', 'Invoice Query', 'General', 'Spam'] as const
 const ALL_BL_STATUSES = ['Match', 'Mismatch', 'Needs Review', 'New', 'Classified'] as const
 
@@ -36,7 +40,7 @@ function EmailRow({ e, onSelect, isLast }: { e: GmailEmail; onSelect: (id: strin
       onMouseLeave={ev => (ev.currentTarget as HTMLTableRowElement).style.background = 'white'}
     >
       <td style={{ padding: '14px 16px', width: 16 }}>
-        {warn && <span style={{ width: 7, height: 7, borderRadius: '50%', background: amber, display: 'block' }} />}
+        {warn && <span style={{ width: 7, height: 7, borderRadius: '50%', background: e.status === 'Needs Review' ? red : amber, display: 'block' }} />}
       </td>
       <td style={{ padding: '14px 16px' }}>
         <div style={{ fontSize: 13, fontWeight: 600, color: ink, whiteSpace: 'nowrap', maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis' }}>{e.fromName}</div>
@@ -47,7 +51,7 @@ function EmailRow({ e, onSelect, isLast }: { e: GmailEmail; onSelect: (id: strin
         <div style={{ fontSize: 12, color: muted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 2 }}>{e.snippet}</div>
       </td>
       <td style={{ padding: '14px 16px', whiteSpace: 'nowrap' }}>
-        <Badge label={e.status === 'Processing' && e.type === 'General' ? 'Processing' : e.type} />
+        <Badge label={e.status === 'Processing' ? 'Processing' : e.type} />
       </td>
       <td style={{ padding: '14px 16px', whiteSpace: 'nowrap' }}>
         {e.status === 'Processing' ? (
@@ -207,6 +211,7 @@ interface InboxPageProps {
   hasMore?: boolean
   onLoadMore?: () => void
   loadingMore?: boolean
+  onUploadEml?: (file: File) => void | Promise<void>
 }
 
 export function InboxPage({
@@ -220,9 +225,23 @@ export function InboxPage({
   hasMore,
   onLoadMore,
   loadingMore,
+  onUploadEml,
 }: InboxPageProps) {
   const [search, setSearch] = useState('')
   const [filters, setFilters] = useState<InboxFilters>(DEFAULT_FILTERS)
+  const [uploadingEml, setUploadingEml] = useState(false)
+  const emlInputRef = useRef<HTMLInputElement | null>(null)
+
+  async function handleEmlSelected(file: File | undefined) {
+    if (!file || !onUploadEml) return
+    setUploadingEml(true)
+    try {
+      await onUploadEml(file)
+    } finally {
+      setUploadingEml(false)
+      if (emlInputRef.current) emlInputRef.current.value = ''
+    }
+  }
 
   if (loading && emails.length === 0) {
     return <InboxSkeleton />
@@ -292,6 +311,30 @@ export function InboxPage({
           />
         </div>
         <FilterDropdown filters={filters} onChange={setFilters} />
+        {onUploadEml && (
+          <>
+            <input
+              ref={emlInputRef}
+              type="file"
+              accept=".eml,message/rfc822"
+              style={{ display: 'none' }}
+              onChange={e => handleEmlSelected(e.target.files?.[0])}
+            />
+            <button
+              onClick={() => emlInputRef.current?.click()}
+              disabled={uploadingEml}
+              style={{
+                fontSize: 11, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase',
+                background: white, color: navy, border: `1px solid ${border}`, borderRadius: 4,
+                padding: '8px 14px', cursor: uploadingEml ? 'not-allowed' : 'pointer',
+                display: 'inline-flex', alignItems: 'center', gap: 6, opacity: uploadingEml ? 0.6 : 1,
+              }}
+            >
+              {uploadingEml && <Spinner size={12} color={navy} />}
+              {uploadingEml ? 'Uploading…' : '+ Upload .eml'}
+            </button>
+          </>
+        )}
         {onClassify && (
           <button
             onClick={onClassify}
@@ -327,14 +370,16 @@ export function InboxPage({
 
       {showGrouped ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 28 }}>
-          {CATEGORY_ORDER.map(cat => {
-            const group = processed.filter(e => e.type === cat)
+          {GROUP_ORDER.map(cat => {
+            const group = cat === 'Processing'
+              ? processed.filter(e => e.status === 'Processing')
+              : processed.filter(e => e.type === cat && e.status !== 'Processing')
             if (!group.length) return null
             return (
               <div key={cat}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-                  <span style={{ color: muted, fontSize: 13 }}>—</span>
-                  <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: muted }}>{cat}</span>
+                  {cat === 'Processing' ? <Spinner size={11} color={muted} /> : <span style={{ color: muted, fontSize: 13 }}>—</span>}
+                  <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: muted }}>{cat === 'Processing' ? 'Classifying…' : cat}</span>
                   <span style={{ fontSize: 11, color: faint }}>({group.length})</span>
                 </div>
                 <EmailTable rows={group} onSelect={onSelect} />

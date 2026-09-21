@@ -8,6 +8,9 @@ import {
   amberBdr,
   green,
   greenBg,
+  red,
+  redBg,
+  redBdr,
 } from '../../constants/tokens'
 
 // ─── SectionLabel ─────────────────────────────────────────────────────────────
@@ -75,7 +78,7 @@ export function Badge({ label }: { label: string }) {
     'General':             { bg: '#F3F4F6', color: '#4B5563', border: '#E5E7EB' },
     'Spam':                { bg: '#FFF1F2', color: '#9F1239', border: '#FECDD3' },
     'Mismatch':            { bg: amberBg,  color: '#92400E', border: amberBdr },
-    'Needs Review':        { bg: amberBg,  color: '#92400E', border: amberBdr },
+    'Needs Review':        { bg: redBg,    color: red,       border: redBdr },
     'Match':               { bg: greenBg,  color: green,     border: '#86EFAC' },
     'Classified':          { bg: '#F3F4F6', color: '#4B5563', border: '#E5E7EB' },
     'New':                 { bg: '#EFF6FF', color: '#1D4ED8', border: '#BFDBFE' },
@@ -86,7 +89,7 @@ export function Badge({ label }: { label: string }) {
   const isProcessing = label === 'Processing'
   return (
     <span className="inline-flex items-center gap-1" style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase', padding: '3px 8px', border: `1px solid ${s.border}`, borderRadius: 3, background: s.bg, color: s.color }}>
-      {dot && <span style={{ width: 5, height: 5, borderRadius: '50%', background: label === 'Match' ? green : '#D97706', display: 'inline-block' }} />}
+      {dot && <span style={{ width: 5, height: 5, borderRadius: '50%', background: label === 'Match' ? green : label === 'Needs Review' ? red : '#D97706', display: 'inline-block' }} />}
       {isProcessing && <Spinner size={9} color="#1D4ED8" />}
       {label}
     </span>

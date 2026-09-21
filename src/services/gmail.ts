@@ -1,4 +1,4 @@
-import type { GmailEmail, EmailType, EmailStatus, UserInfo } from '../types'
+import type { GmailEmail, EmailType, EmailStatus, UserInfo, AttachmentRef } from '../types'
 
 export async function delay(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms))
@@ -91,6 +91,55 @@ export function parseFrom(from: string) {
   return m ? { name: m[1].replace(/"/g, '').trim() || m[2], email: m[2] } : { name: from, email: from }
 }
 
+export function extractAttachmentRefs(payload: any): AttachmentRef[] {
+  const refs: AttachmentRef[] = []
+  function walk(node: any) {
+    if (!node) return
+    if (node.filename && node.filename.length > 0 && node.body?.attachmentId) {
+      refs.push({ filename: node.filename, attachmentId: node.body.attachmentId })
+    }
+    if (node.parts) {
+      for (const p of node.parts) walk(p)
+    }
+  }
+  walk(payload)
+  return refs
+}
+
+function base64UrlToBytes(base64url: string): Uint8Array {
+  const base64 = base64url.replace(/-/g, '+').replace(/_/g, '/')
+  const binary = atob(base64)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+  return bytes
+}
+
+/**
+ * Fetches a single Gmail attachment's raw bytes as a File.
+ */
+export async function fetchAttachment(token: string, messageId: string, ref: AttachmentRef): Promise<File> {
+  const res = await gmailFetch(token, `users/me/messages/${messageId}/attachments/${ref.attachmentId}`)
+  const bytes = base64UrlToBytes(res.data)
+  return new File([bytes.buffer as ArrayBuffer], ref.filename)
+}
+
+/**
+ * Fetches all of a message's attachments as Files, bounded concurrency.
+ */
+export async function fetchMessageAttachments(token: string, messageId: string, refs: AttachmentRef[]): Promise<File[]> {
+  return fetchInBatches(refs, ref => fetchAttachment(token, messageId, ref), 5)
+}
+
+/**
+ * Looks up a message's attachment refs directly (for emails that were loaded
+ * from the backend cache rather than a fresh Gmail page fetch, and so never
+ * had their attachmentRefs captured).
+ */
+export async function fetchMessageAttachmentRefs(token: string, messageId: string): Promise<AttachmentRef[]> {
+  const msg = await gmailFetch(token, `users/me/messages/${messageId}?format=full`)
+  return extractAttachmentRefs(msg.payload)
+}
+
 export interface GmailPageResult {
   emails: GmailEmail[]
   nextPageToken?: string
@@ -110,7 +159,8 @@ export async function fetchEmailsPage(token: string, pageToken?: string, maxResu
     const timestamp = dateStr ? new Date(dateStr).getTime() : Number(msg.internalDate) || Date.now()
     const snippet = msg.snippet || ''
     const body = extractBody(msg.payload)
-    const hasAttachments = !!(msg.payload?.parts?.some((p: any) => p.filename?.length > 0))
+    const attachmentRefs = extractAttachmentRefs(msg.payload)
+    const hasAttachments = attachmentRefs.length > 0
     return {
       id,
       threadId: msg.threadId,
@@ -123,9 +173,10 @@ export async function fetchEmailsPage(token: string, pageToken?: string, maxResu
       type: 'General',
       status: 'Processing',
       hasAttachments,
+      attachmentRefs,
       body: body.slice(0, 2000),
     } as GmailEmail
-  }, 5)
+  }, 8)
   return {
     emails: emails.sort((a, b) => b.timestamp - a.timestamp),
     nextPageToken: list.nextPageToken,

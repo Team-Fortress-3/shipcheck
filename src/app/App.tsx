@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import type { Page, GmailEmail, UserInfo, ComparisonField, ClassifyingState } from '../types'
 import { bg, CRUMBS } from '../constants/tokens'
 import { Sidebar } from '../components/layout/Sidebar'
@@ -15,8 +15,12 @@ import {
   syncEmailBatchProgressive,
   classifyEmailsBatch,
   syncUserWithBackendApi,
+  compareEmailAttachmentsApi,
+  uploadEmlApi,
+  getComparisonsApi,
+  mapEmailRecordToGmailEmail,
 } from '../services/api'
-import { fetchEmailsPage, getUserInfo } from '../services/gmail'
+import { fetchEmailsPage, fetchMessageAttachments, fetchMessageAttachmentRefs, fetchInBatches, getUserInfo } from '../services/gmail'
 
 // Pages
 import { LoginPage } from '../pages/LoginPage'
@@ -32,8 +36,31 @@ import { UploadPage } from '../pages/UploadPage'
 import { UploadComparisonPage } from '../pages/UploadComparisonPage'
 import { SettingsPage } from '../pages/SettingsPage'
 
+const GMAIL_TOKEN_STORAGE_KEY = 'shipcheck_gmail_token'
+
+function readStoredGmailToken(): string | null {
+  try {
+    return sessionStorage.getItem(GMAIL_TOKEN_STORAGE_KEY)
+  } catch {
+    return null
+  }
+}
+
 export default function App() {
-  const [gmailToken, setGmailToken] = useState<string | null>(null)
+  // The Google OAuth access token only lives ~1hr and has no refresh token
+  // (implicit flow, no backend token exchange) - but persisting it to
+  // sessionStorage at least survives a page reload within the same tab,
+  // instead of silently losing Gmail connectivity on every refresh.
+  const [gmailToken, setGmailTokenState] = useState<string | null>(readStoredGmailToken)
+  const setGmailToken = useCallback((token: string | null) => {
+    setGmailTokenState(token)
+    try {
+      if (token) sessionStorage.setItem(GMAIL_TOKEN_STORAGE_KEY, token)
+      else sessionStorage.removeItem(GMAIL_TOKEN_STORAGE_KEY)
+    } catch {
+      // sessionStorage unavailable (private mode, etc.) - token just won't survive reloads
+    }
+  }, [])
   const [user, setUser] = useState<UserInfo | null>(null)
   const [emails, setEmails] = useState<GmailEmail[]>([])
   const [loading, setLoading] = useState(false)
@@ -118,6 +145,64 @@ export default function App() {
     checkSession()
   }, [])
 
+  // Tracks emails currently mid-comparison so the UI can show a spinner only
+  // while a request is genuinely in flight - never inferred from status
+  // alone, otherwise an email that never got auto-compared (e.g. classified
+  // in an earlier session, before auto-compare existed, or whose Gmail
+  // attachment fetch silently failed) would show "Comparing…" forever with
+  // nothing actually running and no way to retry.
+  const [comparingIds, setComparingIds] = useState<Set<string>>(new Set())
+
+  // Per-email compare failure reasons, so EmailDetailPage (which doesn't
+  // render the global apiError banner) can show exactly why a specific
+  // email's comparison didn't run, instead of a click that looks like a
+  // no-op.
+  const [compareErrors, setCompareErrors] = useState<Record<string, string>>({})
+
+  // Fetches an email's Gmail attachments (looking them up fresh if this
+  // GmailEmail object doesn't already carry them, e.g. it came from the
+  // backend cache rather than a live Gmail page fetch) and runs the compare
+  // pipeline against them. Used both as the automatic post-classify trigger
+  // and as the manual "Compare Now" retry button.
+  const compareEmailNow = useCallback(async (email: GmailEmail) => {
+    setCompareErrors(prev => {
+      if (!(email.id in prev)) return prev
+      const { [email.id]: _drop, ...rest } = prev
+      return rest
+    })
+    if (!gmailToken) {
+      const msg = 'Gmail is not connected in this session. Reconnect it in Settings to fetch this email\'s attachments.'
+      setApiError(msg)
+      setCompareErrors(prev => ({ ...prev, [email.id]: msg }))
+      return null
+    }
+    setComparingIds(prev => new Set(prev).add(email.id))
+    try {
+      let refs = email.attachmentRefs
+      if (!refs || !refs.length) {
+        refs = await fetchMessageAttachmentRefs(gmailToken, email.id)
+      }
+      const files = refs.length ? await fetchMessageAttachments(gmailToken, email.id, refs) : []
+      const result = await compareEmailAttachmentsApi(email.id, files)
+      setEmails(prev => prev.map(e => (
+        e.id === email.id ? { ...e, status: result.status, fields: result.fields, comparisonId: result.comparison_id, attachmentRefs: refs } : e
+      )))
+      return result
+    } catch (err: any) {
+      console.warn(`Compare failed for email ${email.id}:`, err)
+      const msg = err.message || String(err)
+      setApiError(`Comparison failed for "${email.subject.slice(0, 40)}": ${msg}`)
+      setCompareErrors(prev => ({ ...prev, [email.id]: msg }))
+      return null
+    } finally {
+      setComparingIds(prev => {
+        const next = new Set(prev)
+        next.delete(email.id)
+        return next
+      })
+    }
+  }, [gmailToken])
+
   // Progressive synchronization with backend Postgres
   const syncEmailsWithBackend = useCallback(async (targets: GmailEmail[]) => {
     if (!targets.length) return
@@ -133,14 +218,19 @@ export default function App() {
     try {
       await syncEmailBatchProgressive(
         targets,
-        (syncedItem) => {
+        (syncedItem, originalItem) => {
           setClassifying(prev => ({ ...prev, current: prev.current + 1 }))
+          // Keep the attachmentRefs captured during the Gmail page fetch -
+          // the backend's EmailRecord doesn't store them, so syncedItem alone
+          // would lose them. The auto-compare backlog sweeper (below) picks
+          // this email up and runs the comparison once it lands in state.
+          const merged = { ...syncedItem, attachmentRefs: originalItem.attachmentRefs }
           setEmails(prev => {
-            const exists = prev.some(e => e.id === syncedItem.id)
+            const exists = prev.some(e => e.id === merged.id)
             if (exists) {
-              return prev.map(e => (e.id === syncedItem.id ? syncedItem : e))
+              return prev.map(e => (e.id === merged.id ? merged : e))
             } else {
-              return [...prev, syncedItem]
+              return [...prev, merged]
             }
           })
         },
@@ -156,7 +246,8 @@ export default function App() {
           // Revert status so item isn't stuck in 'Processing'
           setEmails(prev => prev.map(e => e.id === originalItem.id ? { ...e, status: e.status === 'Processing' ? 'New' : e.status } : e))
         },
-        2
+        4,
+        5
       )
       setClassifying(prev => ({ ...prev, active: false }))
     } catch (err: any) {
@@ -166,6 +257,27 @@ export default function App() {
       setApiError(msg)
     }
   }, [])
+
+  // Sweeps the full email list for any Document Comparison email still
+  // sitting at "New" - whether it just got classified, came back from the
+  // cache on initial load, or was uploaded as .eml - and auto-compares it.
+  // Runs once per email id (tracked in a ref, not state, so it doesn't
+  // itself retrigger this effect) so a failed attempt doesn't loop forever;
+  // the "Compare Now" button on EmailDetailPage covers manual retry.
+  const autoCompareAttempted = useRef<Set<string>>(new Set())
+  useEffect(() => {
+    if (!gmailToken) return
+    const candidates = emails.filter(e =>
+      e.type === 'Document Comparison' &&
+      e.status === 'New' &&
+      e.hasAttachments &&
+      !e.id.startsWith('eml_') &&
+      !autoCompareAttempted.current.has(e.id)
+    )
+    if (!candidates.length) return
+    candidates.forEach(e => autoCompareAttempted.current.add(e.id))
+    fetchInBatches(candidates, compareEmailNow, 8)
+  }, [emails, gmailToken, compareEmailNow])
 
   // Load Gmail messages (called when Gmail is connected)
   const loadGmailEmails = useCallback(async (token: string) => {
@@ -317,6 +429,41 @@ export default function App() {
     setPage('email-detail')
   }
 
+  // Uploads a raw .eml file: backend parses/classifies/auto-compares it,
+  // then it's added straight into the inbox list like a synced Gmail message.
+  async function handleUploadEml(file: File) {
+    try {
+      const created = await uploadEmlApi(file)
+      const mapped = mapEmailRecordToGmailEmail(created)
+      setEmails(prev => {
+        const exists = prev.some(e => e.id === mapped.id)
+        return exists ? prev.map(e => (e.id === mapped.id ? mapped : e)) : [mapped, ...prev]
+      })
+    } catch (err: any) {
+      setApiError(`EML upload failed: ${err.message || String(err)}`)
+    }
+  }
+
+  // Opens the comparison report for an email whose auto-compare already ran.
+  // If the fields aren't in local state yet (e.g. after a page reload),
+  // fetches the saved ComparisonRecord for this email first.
+  async function openComparison(id: string) {
+    const email = emails.find(e => e.id === id)
+    if (email && !email.fields) {
+      try {
+        const records = await getComparisonsApi(1, 0, id)
+        if (records[0]) {
+          setEmails(prev => prev.map(e => (
+            e.id === id ? { ...e, fields: records[0].fields, comparisonId: records[0].id } : e
+          )))
+        }
+      } catch (err) {
+        console.warn(`Failed to fetch comparison for email ${id}:`, err)
+      }
+    }
+    setPage('comparison')
+  }
+
   // Show nothing or blank beige during initial session restore
   if (authChecking) {
     return <div style={{ minHeight: '100vh', background: bg }} />
@@ -374,13 +521,26 @@ export default function App() {
               hasMore={!!nextPageToken}
               onLoadMore={loadMoreEmails}
               loadingMore={loadingMore}
+              onUploadEml={handleUploadEml}
             />
           )}
           {page === 'email-detail' && selectedEmail && (
             <EmailDetailPage
               email={selectedEmail}
               onBack={() => setPage('inbox')}
-              onProcess={() => setPage('processing')}
+              isComparing={comparingIds.has(selectedEmail.id)}
+              gmailConnected={!!gmailToken}
+              onGoToSettings={() => setPage('settings')}
+              compareError={compareErrors[selectedEmail.id] || null}
+              onProcess={async () => {
+                if (selectedEmail.status === 'New' || selectedEmail.status === 'Processing') {
+                  const result = await compareEmailNow(selectedEmail)
+                  if (!result) return
+                  setPage('comparison')
+                } else {
+                  openComparison(selectedEmail.id)
+                }
+              }}
             />
           )}
           {page === 'processing' && (
@@ -391,6 +551,7 @@ export default function App() {
               onBack={() => setPage('email-detail')}
               onGoToUpload={() => setPage('upload')}
               subject={selectedEmail?.subject}
+              fields={selectedEmail?.fields}
             />
           )}
           {page === 'review' && (
@@ -404,6 +565,7 @@ export default function App() {
             <ReviewDetailPage
               id={selectedReviewId}
               emails={emails}
+              user={user}
               onBack={() => setPage('review')}
               onResolve={(id, status) => {
                 setEmails(prev => prev.map(e => e.id === id ? { ...e, status } : e))
