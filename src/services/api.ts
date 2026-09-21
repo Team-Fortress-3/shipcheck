@@ -1,5 +1,7 @@
 // ─── API Service Layer ────────────────────────────────────────────────────────
-// Connects ShipCheck to the email-extract-compare FastAPI backend (http://localhost:8000)
+// Connects ShipCheck to the email-extract-compare FastAPI backend
+
+const API_BASE = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '')
 
 export type EmailType = 'Document Comparison' | 'New SI Request' | 'Invoice Query' | 'General' | 'Spam'
 export type EmailStatus = 'New' | 'Mismatch' | 'Match' | 'Needs Review' | 'Classified' | 'Processing'
@@ -131,7 +133,7 @@ export interface HealthResponse {
  * Checks if the FastAPI backend service is reachable and healthy.
  */
 export async function checkBackendHealth(): Promise<HealthResponse> {
-  const res = await fetch('/api/health')
+  const res = await fetch(`${API_BASE}/api/health`)
   if (!res.ok) {
     throw new Error(`Backend health check failed with status ${res.status}`)
   }
@@ -140,7 +142,7 @@ export async function checkBackendHealth(): Promise<HealthResponse> {
 
 async function extractErrorDetail(res: Response): Promise<string> {
   if (res.status === 502 || res.status === 504) {
-    return 'FastAPI backend service is not running at http://localhost:8000. Please start the backend server (uvicorn api.main:app --reload --port 8000).'
+    return 'FastAPI backend service is not running or unreachable. Please verify the backend service.'
   }
   if (res.status === 404) {
     return `Endpoint ${res.url} not found (404). Please ensure the backend is running with the latest routes.`
@@ -165,13 +167,13 @@ async function extractErrorDetail(res: Response): Promise<string> {
 export async function classifyEmailApi(req: EmailClassifyRequest): Promise<EmailClassifyResponse> {
   let res: Response
   try {
-    res = await fetch('/api/classify', {
+    res = await fetch(`${API_BASE}/api/classify`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(req),
     })
   } catch (err: any) {
-    throw new Error('FastAPI backend service is offline. Please start it at http://localhost:8000 (uvicorn api.main:app --reload --port 8000).')
+    throw new Error('FastAPI backend service is offline. Please verify the backend service is running.')
   }
 
   if (!res.ok) {
@@ -193,12 +195,12 @@ export async function compareFilesApi(siFile: File, blFile: File): Promise<Compa
 
   let res: Response
   try {
-    res = await fetch('/api/compare', {
+    res = await fetch(`${API_BASE}/api/compare`, {
       method: 'POST',
       body: formData,
     })
   } catch {
-    throw new Error('FastAPI backend service is offline. Please start it at http://localhost:8000 (uvicorn api.main:app --reload --port 8000).')
+    throw new Error('FastAPI backend service is offline. Please verify the backend service is running.')
   }
 
   if (!res.ok) {
@@ -275,9 +277,9 @@ export async function getCachedEmailsApi(limit = 50, offset = 0, emailType?: str
 
   let res: Response
   try {
-    res = await fetch(`/api/emails?${params.toString()}`)
+    res = await fetch(`${API_BASE}/api/emails?${params.toString()}`)
   } catch {
-    throw new Error('FastAPI backend service is offline. Please start it at http://localhost:8000 (uvicorn api.main:app --reload --port 8000).')
+    throw new Error('FastAPI backend service is offline. Please verify the backend service is running.')
   }
 
   if (!res.ok) {
@@ -298,13 +300,13 @@ export async function syncEmailBatchApi(emails: any[]): Promise<any[]> {
   const payload = emails.map(e => mapGmailEmailToCreatePayload(e))
   let res: Response
   try {
-    res = await fetch('/api/emails/batch', {
+    res = await fetch(`${API_BASE}/api/emails/batch`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     })
   } catch {
-    throw new Error('FastAPI backend service is offline. Please start it at http://localhost:8000 (uvicorn api.main:app --reload --port 8000).')
+    throw new Error('FastAPI backend service is offline. Please verify the backend service is running.')
   }
 
   if (!res.ok) {
@@ -351,7 +353,7 @@ export async function syncEmailBatchProgressive<T extends { id: string }>(
  * Fetches historical comparison records from SQLite.
  */
 export async function getComparisonsApi(limit = 50, offset = 0): Promise<ComparisonRecord[]> {
-  const res = await fetch(`/api/comparisons?limit=${limit}&offset=${offset}`)
+  const res = await fetch(`${API_BASE}/api/comparisons?limit=${limit}&offset=${offset}`)
   if (!res.ok) throw new Error(`Failed to fetch comparisons: ${res.status}`)
   const data = await res.json()
   return (data || []).map(parseComparisonRecord)
@@ -361,7 +363,7 @@ export async function getComparisonsApi(limit = 50, offset = 0): Promise<Compari
  * Fetches a single comparison by ID.
  */
 export async function getComparisonByIdApi(id: number): Promise<ComparisonRecord> {
-  const res = await fetch(`/api/comparisons/${id}`)
+  const res = await fetch(`${API_BASE}/api/comparisons/${id}`)
   if (!res.ok) throw new Error(`Failed to fetch comparison ${id}: ${res.status}`)
   const data = await res.json()
   return parseComparisonRecord(data)
