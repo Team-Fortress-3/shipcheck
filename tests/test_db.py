@@ -232,6 +232,66 @@ class TestSQLitePersistence(unittest.TestCase):
             self.assertIsNotNone(db_rec)
             self.assertEqual(db_rec.user_id, "user-uuid-999")
 
+    def test_demo_user_sees_legacy_none_owned_records(self):
+        """
+        Regression test: GET /api/emails for the default "demo" user (no
+        Authorization header) must also return legacy records with
+        user_id IS NULL, not just user_id == "demo" exactly. This has
+        regressed twice now (once from a plain `if user_id:` filter, once
+        from a redundant `.where()` call that ANDed itself into a no-op) -
+        both times because the query looked reasonable at a glance but
+        SQLAlchemy .where() calls chain with AND, silently narrowing the
+        OR clause back down to nothing.
+        """
+        with Session(self.test_engine) as session:
+            session.add(EmailRecord(
+                id="legacy_none_owned", thread_id="t_legacy", from_name="Ops", from_email="ops@ship.com",
+                subject="Pre-auth record", snippet="Seeded before auth existed", date_str="Today", timestamp=700,
+                email_type="General", status="Classified", user_id=None,
+            ))
+            session.add(EmailRecord(
+                id="other_user_owned", thread_id="t_other", from_name="Someone", from_email="someone@ship.com",
+                subject="Not for demo", snippet="Belongs to a real user", date_str="Today", timestamp=800,
+                email_type="General", status="Classified", user_id="some-other-uuid",
+            ))
+            session.commit()
+
+        # No Authorization header -> get_current_user_id defaults to "demo"
+        res = self.client.get("/api/emails")
+        self.assertEqual(res.status_code, 200)
+        ids = [i["id"] for i in res.json()]
+        self.assertIn("legacy_none_owned", ids)
+        self.assertNotIn("other_user_owned", ids)
+
+    def test_demo_user_claims_none_owned_record_without_reclassifying(self):
+        """
+        Regression test: POST /api/emails/batch as the demo user must
+        recognize a pre-existing user_id=None record as already cached (and
+        not burn an LLM call re-classifying it) - same underlying bug as
+        above, but in the existing_records lookup used for the cache check.
+        """
+        with Session(self.test_engine) as session:
+            session.add(EmailRecord(
+                id="msg_legacy_claim", thread_id="th_legacy", from_name="Shipper", from_email="shipper@example.com",
+                subject="Existing order check", snippet="Compare SI", date_str="Yesterday", timestamp=900,
+                email_type="Document Comparison", status="New", user_id=None,
+            ))
+            session.commit()
+
+        batch_payload = [{
+            "id": "msg_legacy_claim", "thread_id": "th_legacy", "from_name": "Shipper",
+            "from_email": "shipper@example.com", "subject": "Existing order check", "snippet": "Compare SI",
+            "date_str": "Yesterday", "timestamp": 900, "has_attachments": True,
+        }]
+
+        with patch("api.routes.emails._classifier.classify") as mock_classify:
+            resp = self.client.post("/api/emails/batch", json=batch_payload)
+            self.assertEqual(resp.status_code, 200)
+            data = resp.json()
+            self.assertEqual(len(data), 1)
+            self.assertEqual(data[0]["id"], "msg_legacy_claim")
+            self.assertEqual(mock_classify.call_count, 0)
+
     def test_get_emails_pagination_and_filtering(self):
         """Verifies GET /api/emails respects filters, user isolation, and timestamp ordering."""
         with Session(self.test_engine) as session:
