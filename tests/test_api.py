@@ -1,4 +1,5 @@
 import sys
+import json
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -139,6 +140,62 @@ class TestFastAPIEndpoints(unittest.TestCase):
             data = response.json()
             self.assertEqual(data["status"], "Match")
             self.assertTrue(all(f["match"] for f in data["fields"]))
+
+    def test_sync_user_identities_synchronization(self):
+        """Verifies /api/auth/sync-user creates auth.users and auth.identities with correct parameters."""
+        mock_conn = MagicMock()
+        mock_conn.execute.return_value.fetchone.return_value = None  # user doesn't exist yet
+
+        executed_sqls = []
+        executed_params = []
+
+        def track_execute(stmt, params=None):
+            executed_sqls.append(str(stmt))
+            if params:
+                executed_params.append(params)
+            mock_res = MagicMock()
+            mock_res.fetchone.return_value = None
+            return mock_res
+
+        mock_conn.execute.side_effect = track_execute
+
+        with patch("api.routes.auth.engine.connect") as mock_connect:
+            mock_connect.return_value.__enter__.return_value = mock_conn
+
+            payload = {
+                "email": "testuser@gmail.com",
+                "name": "Test User",
+                "picture": "https://example.com/avatar.png",
+                "provider": "google",
+            }
+            response = self.client.post("/api/auth/sync-user", json=payload)
+            self.assertEqual(response.status_code, 200)
+            data = response.json()
+            self.assertEqual(data["email"], "testuser@gmail.com")
+            self.assertEqual(data["name"], "Test User")
+            self.assertTrue(len(data["token"]) > 10)
+
+            # Check that auth.identities SQL was executed
+            identity_sqls = [s for s in executed_sqls if "INSERT INTO auth.identities" in s]
+            self.assertEqual(len(identity_sqls), 1)
+            ident_sql = identity_sqls[0]
+
+            # Verify the generated column 'email' is omitted from INSERT INTO auth.identities
+            # It should have: id, provider_id, user_id, identity_data, provider, last_sign_in_at, created_at, updated_at
+            columns_part = ident_sql.split("(")[1].split(")")[0]
+            col_names = [c.strip() for c in columns_part.split(",")]
+            self.assertNotIn("email", col_names)
+            self.assertIn("provider_id", col_names)
+            self.assertIn("identity_data", col_names)
+            self.assertIn("provider", col_names)
+
+            # Check parameters
+            ident_param = next(p for p in executed_params if "pid" in p)
+            self.assertEqual(ident_param["provider"], "google")
+            ident_data = json.loads(ident_param["data"])
+            self.assertEqual(ident_data["email"], "testuser@gmail.com")
+            self.assertEqual(ident_data["full_name"], "Test User")
+            self.assertEqual(ident_data["sub"], data["user_id"])
 
 
 if __name__ == "__main__":

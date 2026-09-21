@@ -120,6 +120,59 @@ class TestSQLitePersistence(unittest.TestCase):
             # Call count should STILL be 2 (no redundant LLM calls)
             self.assertEqual(mock_classify.call_count, 2)
 
+    def test_batch_sync_user_id_transitions_and_claiming(self):
+        """
+        Verifies:
+        1. An existing unassigned (user_id=None) or demo record is NOT re-classified.
+        2. Authenticated user claims the previously unassigned record.
+        """
+        # Pre-seed an unassigned record
+        with Session(self.test_engine) as session:
+            session.add(EmailRecord(
+                id="msg_claim_01",
+                user_id=None,
+                thread_id="th_claim",
+                from_name="Shipper",
+                from_email="shipper@example.com",
+                subject="Existing order check",
+                snippet="Compare SI",
+                date_str="Yesterday",
+                timestamp=1726800000000,
+                email_type="Document Comparison",
+                status="New",
+            ))
+            session.commit()
+
+        batch_payload = [{
+            "id": "msg_claim_01",
+            "thread_id": "th_claim",
+            "from_name": "Shipper",
+            "from_email": "shipper@example.com",
+            "subject": "Existing order check",
+            "snippet": "Compare SI",
+            "date_str": "Yesterday",
+            "timestamp": 1726800000000,
+            "has_attachments": True,
+            "user_id": "user-uuid-999",
+        }]
+
+        with patch("api.routes.emails._classifier.classify") as mock_classify:
+            # Sync with authenticated user ID
+            resp = self.client.post("/api/emails/batch", json=batch_payload)
+            self.assertEqual(resp.status_code, 200)
+            data = resp.json()
+            self.assertEqual(len(data), 1)
+            self.assertEqual(data[0]["id"], "msg_claim_01")
+            self.assertEqual(data[0]["user_id"], "user-uuid-999")
+            # Must not reclassify!
+            self.assertEqual(mock_classify.call_count, 0)
+
+        # Verify DB persistence of claimed user_id
+        with Session(self.test_engine) as session:
+            db_rec = session.get(EmailRecord, "msg_claim_01")
+            self.assertIsNotNone(db_rec)
+            self.assertEqual(db_rec.user_id, "user-uuid-999")
+
     def test_get_emails_pagination_and_filtering(self):
         """Verifies GET /api/emails respects filters and timestamp ordering."""
         with Session(self.test_engine) as session:
@@ -139,15 +192,36 @@ class TestSQLitePersistence(unittest.TestCase):
                     subject="Sub 3", snippet="Snip 3", date_str="Today", timestamp=300,
                     email_type="Document Comparison", status="Match"
                 ),
+                EmailRecord(
+                    id="e_auth", thread_id="t4", from_name="D", from_email="d@test.com",
+                    subject="Sub 4", snippet="Snip 4", date_str="Today", timestamp=400,
+                    email_type="General", status="Classified", user_id="auth-uuid-777"
+                ),
             ])
             session.commit()
 
-        # Check default query (sorted DESC by timestamp)
+        # Check default query (demo user gets demo + None records, ordered DESC by timestamp)
         res = self.client.get("/api/emails")
         self.assertEqual(res.status_code, 200)
         items = res.json()
         self.assertEqual(len(items), 3)
         self.assertEqual([i["id"] for i in items], ["e3", "e2", "e1"])
+
+        # Authenticated query with user_id header gets only auth-uuid-777
+        res_auth = self.client.get(
+            "/api/emails",
+            headers={"Authorization": "Bearer fake_token"}
+        )
+        # Mocking auth decode for a specific UUID
+        with patch("jwt.decode", return_value={"sub": "auth-uuid-777"}):
+            res_auth = self.client.get(
+                "/api/emails",
+                headers={"Authorization": "Bearer valid_token"}
+            )
+            self.assertEqual(res_auth.status_code, 200)
+            items_auth = res_auth.json()
+            self.assertEqual(len(items_auth), 1)
+            self.assertEqual(items_auth[0]["id"], "e_auth")
 
         # Filter by email_type
         res_filter = self.client.get("/api/emails?email_type=Document Comparison")

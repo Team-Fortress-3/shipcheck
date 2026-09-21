@@ -56,10 +56,40 @@ def sync_user(req: UserSyncRequest):
 
             if res:
                 user_id = str(res[0])
+                # Ensure identity also exists for existing user if missing
+                try:
+                    ident_exists = conn.execute(
+                        text("SELECT id FROM auth.identities WHERE user_id = :uid"),
+                        {"uid": user_id}
+                    ).fetchone()
+                    if not ident_exists:
+                        ident_dict = {"sub": user_id, "email": email, "full_name": name}
+                        if req.picture:
+                            ident_dict["avatar_url"] = req.picture
+                        conn.execute(
+                            text("""
+                                INSERT INTO auth.identities (
+                                    id, provider_id, user_id, identity_data, provider, last_sign_in_at, created_at, updated_at
+                                ) VALUES (
+                                    :id, :pid, :uid, :data, :provider, NOW(), NOW(), NOW()
+                                )
+                            """),
+                            {
+                                "id": str(uuid.uuid4()),
+                                "pid": user_id,
+                                "uid": user_id,
+                                "data": json.dumps(ident_dict),
+                                "provider": req.provider or "google",
+                            }
+                        )
+                        conn.commit()
+                except Exception as ident_err:
+                    logger.warning(f"Failed to verify/link identity for existing user {email}: {ident_err}")
             else:
                 user_id = str(uuid.uuid4())
                 meta = json.dumps({"full_name": name, "avatar_url": req.picture or ""})
-                app_meta = json.dumps({"provider": req.provider, "providers": [req.provider]})
+                provider = req.provider or "google"
+                app_meta = json.dumps({"provider": provider, "providers": [provider]})
                 conn.execute(
                     text("""
                         INSERT INTO auth.users (
@@ -81,7 +111,9 @@ def sync_user(req: UserSyncRequest):
 
                 # Also link identity so user shows up with correct provider in Supabase Dashboard
                 try:
-                    ident_data = json.dumps({"sub": user_id, "email": email, "full_name": name, "avatar_url": req.picture or ""})
+                    ident_dict = {"sub": user_id, "email": email, "full_name": name}
+                    if req.picture:
+                        ident_dict["avatar_url"] = req.picture
                     conn.execute(
                         text("""
                             INSERT INTO auth.identities (
@@ -94,8 +126,8 @@ def sync_user(req: UserSyncRequest):
                             "id": str(uuid.uuid4()),
                             "pid": user_id,
                             "uid": user_id,
-                            "data": ident_data,
-                            "provider": req.provider or "google",
+                            "data": json.dumps(ident_dict),
+                            "provider": provider,
                         }
                     )
                     conn.commit()

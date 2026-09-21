@@ -22,7 +22,7 @@ _classifier = EmailClassifier()
 
 @router.get("", response_model=List[EmailRecord], summary="Get cached inbox emails")
 async def get_emails(
-    limit: int = Query(default=50, ge=1, le=500),
+    limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     email_type: Optional[str] = Query(default=None, description="Filter by EmailType"),
     status: Optional[str] = Query(default=None, description="Filter by EmailStatus"),
@@ -35,7 +35,10 @@ async def get_emails(
     """
     stmt = select(EmailRecord)
     if user_id:
-        stmt = stmt.where(EmailRecord.user_id == user_id)
+        if user_id == "demo":
+            stmt = stmt.where((EmailRecord.user_id == "demo") | (EmailRecord.user_id == None))
+        else:
+            stmt = stmt.where(EmailRecord.user_id == user_id)
     if email_type:
         stmt = stmt.where(EmailRecord.email_type == email_type)
     if status:
@@ -74,7 +77,17 @@ async def batch_sync_emails(
 
         if item.id in existing_records:
             rec = existing_records[item.id]
-            if rec.user_id == effective_user_id and rec.status and rec.status != "Processing":
+            user_matches = (
+                rec.user_id == effective_user_id
+                or not rec.user_id
+                or not effective_user_id
+                or effective_user_id == "demo"
+            )
+            if user_matches and rec.status and rec.status != "Processing":
+                # Claim record for authenticated user if previously unassigned
+                if not rec.user_id and effective_user_id and effective_user_id != "demo":
+                    rec.user_id = effective_user_id
+                    session.add(rec)
                 results.append(rec)
                 continue
 
