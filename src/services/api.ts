@@ -1,7 +1,21 @@
 // ─── API Service Layer ────────────────────────────────────────────────────────
 // Connects ShipCheck to the email-extract-compare FastAPI backend
+import { getSupabaseAccessToken } from './supabase'
 
 const API_BASE = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '')
+
+async function getAuthHeaders(extraHeaders: Record<string, string> = {}): Promise<Record<string, string>> {
+  const headers: Record<string, string> = { ...extraHeaders }
+  try {
+    const token = await getSupabaseAccessToken()
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`
+    }
+  } catch {
+    // Continue without auth header if session retrieval fails
+  }
+  return headers
+}
 
 export type EmailType = 'Document Comparison' | 'New SI Request' | 'Invoice Query' | 'General' | 'Spam'
 export type EmailStatus = 'New' | 'Mismatch' | 'Match' | 'Needs Review' | 'Classified' | 'Processing'
@@ -167,9 +181,10 @@ async function extractErrorDetail(res: Response): Promise<string> {
 export async function classifyEmailApi(req: EmailClassifyRequest): Promise<EmailClassifyResponse> {
   let res: Response
   try {
+    const headers = await getAuthHeaders({ 'Content-Type': 'application/json' })
     res = await fetch(`${API_BASE}/api/classify`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify(req),
     })
   } catch (err: any) {
@@ -195,8 +210,10 @@ export async function compareFilesApi(siFile: File, blFile: File): Promise<Compa
 
   let res: Response
   try {
+    const headers = await getAuthHeaders()
     res = await fetch(`${API_BASE}/api/compare`, {
       method: 'POST',
+      headers,
       body: formData,
     })
   } catch {
@@ -217,13 +234,14 @@ export async function compareFilesApi(siFile: File, blFile: File): Promise<Compa
 export async function compareTextApi(siText: string, blText: string): Promise<CompareResponse> {
   let res: Response
   try {
-    res = await fetch('/api/compare/text', {
+    const headers = await getAuthHeaders({ 'Content-Type': 'application/json' })
+    res = await fetch(`${API_BASE}/api/compare/text`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({ si_text: siText, bl_text: blText }),
     })
   } catch {
-    throw new Error('FastAPI backend service is offline. Please start it at http://localhost:8000 (uvicorn api.main:app --reload --port 8000).')
+    throw new Error('FastAPI backend service is offline. Please verify the backend service is running.')
   }
 
   if (!res.ok) {
@@ -277,7 +295,10 @@ export async function getCachedEmailsApi(limit = 50, offset = 0, emailType?: str
 
   let res: Response
   try {
-    res = await fetch(`${API_BASE}/api/emails?${params.toString()}`)
+    const headers = await getAuthHeaders()
+    res = await fetch(`${API_BASE}/api/emails?${params.toString()}`, {
+      headers,
+    })
   } catch {
     throw new Error('FastAPI backend service is offline. Please verify the backend service is running.')
   }
@@ -300,9 +321,10 @@ export async function syncEmailBatchApi(emails: any[]): Promise<any[]> {
   const payload = emails.map(e => mapGmailEmailToCreatePayload(e))
   let res: Response
   try {
+    const headers = await getAuthHeaders({ 'Content-Type': 'application/json' })
     res = await fetch(`${API_BASE}/api/emails/batch`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify(payload),
     })
   } catch {
@@ -350,10 +372,13 @@ export async function syncEmailBatchProgressive<T extends { id: string }>(
 }
 
 /**
- * Fetches historical comparison records from SQLite.
+ * Fetches historical comparison records from Supabase Postgres.
  */
 export async function getComparisonsApi(limit = 50, offset = 0): Promise<ComparisonRecord[]> {
-  const res = await fetch(`${API_BASE}/api/comparisons?limit=${limit}&offset=${offset}`)
+  const headers = await getAuthHeaders()
+  const res = await fetch(`${API_BASE}/api/comparisons?limit=${limit}&offset=${offset}`, {
+    headers,
+  })
   if (!res.ok) throw new Error(`Failed to fetch comparisons: ${res.status}`)
   const data = await res.json()
   return (data || []).map(parseComparisonRecord)
@@ -363,10 +388,34 @@ export async function getComparisonsApi(limit = 50, offset = 0): Promise<Compari
  * Fetches a single comparison by ID.
  */
 export async function getComparisonByIdApi(id: number): Promise<ComparisonRecord> {
-  const res = await fetch(`${API_BASE}/api/comparisons/${id}`)
+  const headers = await getAuthHeaders()
+  const res = await fetch(`${API_BASE}/api/comparisons/${id}`, {
+    headers,
+  })
   if (!res.ok) throw new Error(`Failed to fetch comparison ${id}: ${res.status}`)
   const data = await res.json()
   return parseComparisonRecord(data)
+}
+
+/**
+ * Registers / syncs a user with Supabase auth.users in the backend and returns a valid Supabase JWT.
+ */
+export async function syncUserWithBackendApi(user: {
+  email: string
+  name?: string
+  picture?: string
+  provider?: string
+}): Promise<{ user_id: string; email: string; name: string; token: string }> {
+  const res = await fetch(`${API_BASE}/api/auth/sync-user`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(user),
+  })
+  if (!res.ok) {
+    const detail = await extractErrorDetail(res)
+    throw new Error(`User sync failed (${res.status}): ${detail}`)
+  }
+  return res.json()
 }
 
 
