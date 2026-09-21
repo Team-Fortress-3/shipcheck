@@ -135,7 +135,7 @@ export default function App() {
           } else {
             setLoading(true)
             try {
-              const cached = await getCachedEmailsApi(100)
+              const cached = await getCachedEmailsApi(500)
               if (cached && cached.length > 0) {
                 setEmails(cached)
               }
@@ -306,7 +306,7 @@ export default function App() {
       // 1. Instant cache retrieval from Supabase Postgres (<100ms)
       let cached: GmailEmail[] = []
       try {
-        cached = await getCachedEmailsApi(100)
+        cached = await getCachedEmailsApi(500)
         if (cached && cached.length > 0) {
           setEmails(cached)
           // Unblock UI immediately so the user can interact with their inbox with 0 load time
@@ -412,7 +412,7 @@ export default function App() {
     setPage('dashboard')
     setLoading(true)
     // Fetch cached emails for this user from Postgres
-    getCachedEmailsApi(50)
+    getCachedEmailsApi(500)
       .then(cached => {
         if (cached && cached.length > 0) {
           setEmails(cached)

@@ -4,19 +4,35 @@ export async function delay(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
 
-export async function gmailFetch(token: string, path: string, retries = 3, backoff = 800): Promise<any> {
+export async function gmailFetch(token: string, path: string, retries = 5, backoff = 800): Promise<any> {
   for (let attempt = 0; attempt <= retries; attempt++) {
     const r = await fetch(`https://gmail.googleapis.com/gmail/v1/${path}`, {
       headers: { Authorization: `Bearer ${token}` },
     })
     if (r.ok) return r.json()
-    if (r.status === 429 && attempt < retries) {
-      // Exponential backoff with jitter on 429 rate limit
+
+    // Gmail returns rate-limit errors as 403 (not just 429) with a reason
+    // like "rateLimitExceeded"/"userRateLimitExceeded" in the error body -
+    // read it so a burst of concurrent requests can back off and retry
+    // instead of surfacing a bare, unexplained "Gmail API 403".
+    let reason = ''
+    let message = ''
+    try {
+      const body = await r.clone().json()
+      reason = body?.error?.errors?.[0]?.reason || ''
+      message = body?.error?.message || ''
+    } catch {
+      // non-JSON error body - fall through with whatever we have
+    }
+
+    const isRateLimited = r.status === 429 || (r.status === 403 && /rateLimitExceeded|quotaExceeded/i.test(reason))
+    if (isRateLimited && attempt < retries) {
       const wait = backoff * Math.pow(2, attempt) + Math.random() * 300
       await delay(wait)
       continue
     }
-    throw new Error(`Gmail API ${r.status}`)
+
+    throw new Error(`Gmail API ${r.status}${reason ? ` (${reason})` : ''}${message ? `: ${message}` : ''}`)
   }
 }
 
@@ -176,7 +192,7 @@ export async function fetchEmailsPage(token: string, pageToken?: string, maxResu
       attachmentRefs,
       body: body.slice(0, 2000),
     } as GmailEmail
-  }, 8)
+  }, 5)
   return {
     emails: emails.sort((a, b) => b.timestamp - a.timestamp),
     nextPageToken: list.nextPageToken,
