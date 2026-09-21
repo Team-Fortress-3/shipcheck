@@ -79,6 +79,7 @@ export default function App() {
     error: null,
   })
   const [apiError, setApiError] = useState<string | null>(null)
+  const [loadMoreNotice, setLoadMoreNotice] = useState<string | null>(null)
   const [authChecking, setAuthChecking] = useState(true)
 
   // 1. Check for active Supabase cookie session on initial mount
@@ -125,16 +126,24 @@ export default function App() {
         // Unblock auth checking immediately if a user is found so the skeleton layout renders
         if (activeUser) {
           setAuthChecking(false)
-          setLoading(true)
-          try {
-            const cached = await getCachedEmailsApi(100)
-            if (cached && cached.length > 0) {
-              setEmails(cached)
+          // If Gmail was already connected (token restored from sessionStorage,
+          // not just a fresh login), do a full Gmail sync rather than only
+          // reading the cache - otherwise nextPageToken never gets populated
+          // on a page reload and "Load More Emails" has nothing to page from.
+          if (gmailToken) {
+            loadGmailEmails(gmailToken)
+          } else {
+            setLoading(true)
+            try {
+              const cached = await getCachedEmailsApi(100)
+              if (cached && cached.length > 0) {
+                setEmails(cached)
+              }
+            } catch {
+              // Backend offline or no cached records yet
+            } finally {
+              setLoading(false)
             }
-          } catch {
-            // Backend offline or no cached records yet
-          } finally {
-            setLoading(false)
           }
         } else {
           setAuthChecking(false)
@@ -145,6 +154,7 @@ export default function App() {
       }
     }
     checkSession()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // Tracks emails currently mid-comparison so the UI can show a spinner only
@@ -237,14 +247,21 @@ export default function App() {
           })
         },
         (error, originalItem) => {
-          console.error(`Sync failed for email ${originalItem.id}:`, error)
-          const msg = `Backend error on "${originalItem.subject.slice(0, 32)}…": ${error.message}`
+          // A client-side timeout on this request doesn't mean classification
+          // actually failed - the backend keeps running the batch in its
+          // thread pool regardless of whether this fetch gave up waiting, so
+          // it typically completes and persists anyway. Don't alarm the user
+          // over something that's very likely to resolve itself; just log it.
+          const isTimeout = /timed out/i.test(error.message)
+          console.warn(`Sync ${isTimeout ? 'timed out (likely still completing server-side)' : 'failed'} for email ${originalItem.id}:`, error)
           setClassifying(prev => ({
             ...prev,
             current: prev.current + 1,
-            error: msg,
+            error: isTimeout ? prev.error : `Backend error on "${originalItem.subject.slice(0, 32)}…": ${error.message}`,
           }))
-          setApiError(msg)
+          if (!isTimeout) {
+            setApiError(`Backend error on "${originalItem.subject.slice(0, 32)}…": ${error.message}`)
+          }
           // Revert status so item isn't stuck in 'Processing'
           setEmails(prev => prev.map(e => e.id === originalItem.id ? { ...e, status: e.status === 'Processing' ? 'New' : e.status } : e))
         },
@@ -327,6 +344,7 @@ export default function App() {
     if (!gmailToken || !nextPageToken || loadingMore) return
     setLoadingMore(true)
     setApiError(null)
+    setLoadMoreNotice(null)
     try {
       const res = await fetchEmailsPage(gmailToken, nextPageToken, 25)
       setNextPageToken(res.nextPageToken || null)
@@ -341,6 +359,10 @@ export default function App() {
           return [...fresh, ...prev]
         })
         syncEmailsWithBackend(trulyNew)
+      } else if (!res.nextPageToken) {
+        setLoadMoreNotice("You've reached the end of your inbox - no more emails to load.")
+      } else {
+        setLoadMoreNotice('No new emails in that batch (already synced) - the rest of your inbox may still have more.')
       }
     } catch (err: any) {
       setApiError(`Failed to load more emails: ${err.message || String(err)}`)
@@ -512,12 +534,12 @@ export default function App() {
               onSelect={selectEmail}
               loading={loading}
               classifying={classifying}
-              onClassify={() => syncEmailsWithBackend(emails)}
               apiError={apiError}
               onClearError={() => { setApiError(null); setClassifying(prev => ({ ...prev, error: null })) }}
               hasMore={!!nextPageToken}
               onLoadMore={loadMoreEmails}
               loadingMore={loadingMore}
+              loadMoreNotice={loadMoreNotice}
               onUploadEml={handleUploadEml}
             />
           )}

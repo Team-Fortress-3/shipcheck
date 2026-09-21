@@ -426,7 +426,12 @@ export async function syncEmailBatchApi(emails: any[]): Promise<any[]> {
   const payload = emails.map(e => mapGmailEmailToCreatePayload(e))
   let res: Response
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), 18000)
+  // Scales with batch size - syncEmailBatchProgressive now sends several
+  // emails per request (classified concurrently server-side), so a flat 18s
+  // budget sized for one email at a time was too tight and aborted requests
+  // that were still going to succeed, just slower.
+  const timeoutMs = Math.max(18000, emails.length * 6000)
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
   try {
     const headers = await getAuthHeaders({ 'Content-Type': 'application/json' })
     res = await fetch(`${API_BASE}/api/emails/batch`, {
@@ -437,7 +442,7 @@ export async function syncEmailBatchApi(emails: any[]): Promise<any[]> {
     })
   } catch (err: any) {
     if (err?.name === 'AbortError') {
-      throw new Error('Batch sync timed out after 18s.')
+      throw new Error(`Batch sync timed out after ${Math.round(timeoutMs / 1000)}s.`)
     }
     throw new Error('FastAPI backend service is offline. Please verify the backend service is running.')
   } finally {

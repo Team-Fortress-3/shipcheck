@@ -205,12 +205,12 @@ interface InboxPageProps {
   onSelect: (id: string) => void
   loading?: boolean
   classifying?: ClassifyingState
-  onClassify?: () => void
   apiError?: string | null
   onClearError?: () => void
   hasMore?: boolean
   onLoadMore?: () => void
   loadingMore?: boolean
+  loadMoreNotice?: string | null
   onUploadEml?: (file: File) => void | Promise<void>
 }
 
@@ -219,12 +219,12 @@ export function InboxPage({
   onSelect,
   loading,
   classifying,
-  onClassify,
   apiError,
   onClearError,
   hasMore,
   onLoadMore,
   loadingMore,
+  loadMoreNotice,
   onUploadEml,
 }: InboxPageProps) {
   const [search, setSearch] = useState('')
@@ -335,30 +335,6 @@ export function InboxPage({
             </button>
           </>
         )}
-        {onClassify && (
-          <button
-            onClick={onClassify}
-            disabled={classifying?.active}
-            style={{
-              fontSize: 11,
-              fontWeight: 600,
-              letterSpacing: '0.06em',
-              textTransform: 'uppercase',
-              background: classifying?.active ? borderLight : navy,
-              color: white,
-              border: 'none',
-              borderRadius: 4,
-              padding: '8px 14px',
-              cursor: classifying?.active ? 'not-allowed' : 'pointer',
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 6,
-              opacity: classifying?.active ? 0.6 : 1,
-            }}
-          >
-            {classifying?.active ? 'Classifying…' : '⚡ Classify with AI'}
-          </button>
-        )}
         {isFiltered && (
           <button
             onClick={() => { setSearch(''); setFilters(DEFAULT_FILTERS) }}
@@ -416,6 +392,9 @@ export function InboxPage({
             {loadingMore && <Spinner size={12} color={navy} />}
             {loadingMore ? 'Loading more emails…' : 'Load More Emails (25)'}
           </button>
+          {loadMoreNotice && !loadingMore && (
+            <div style={{ marginTop: 10, fontSize: 12, color: muted }}>{loadMoreNotice}</div>
+          )}
         </div>
       )}
     </div>
