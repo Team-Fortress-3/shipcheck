@@ -65,7 +65,7 @@ function DropZone({ label, doc, onDrop, onClear }: {
       <input
         ref={fileInputRef}
         type="file"
-        accept=".pdf"
+        accept=".pdf,.docx,.xlsx,.txt"
         style={{ display: 'none' }}
         onChange={e => { const f = e.target.files?.[0]; if (f) onDrop(f) }}
       />
@@ -73,7 +73,7 @@ function DropZone({ label, doc, onDrop, onClear }: {
         <>
           <div style={{ fontSize: 28, marginBottom: 10 }}>✓</div>
           <div style={{ fontSize: 13, fontWeight: 600, color: green, marginBottom: 4, textAlign: 'center' }}>{doc.file.name}</div>
-          <div style={{ fontSize: 11, color: muted, marginBottom: 16 }}>{(doc.file.size / 1024).toFixed(0)} KB · PDF parsed</div>
+          <div style={{ fontSize: 11, color: muted, marginBottom: 16 }}>{(doc.file.size / 1024).toFixed(0)} KB · Ready</div>
           <button
             onClick={e => { e.stopPropagation(); onClear() }}
             style={{ fontSize: 11, color: muted, background: 'none', border: `1px solid ${border}`, borderRadius: 3, padding: '4px 10px', cursor: 'pointer' }}
@@ -85,8 +85,8 @@ function DropZone({ label, doc, onDrop, onClear }: {
         <>
           <div style={{ fontSize: 32, marginBottom: 12, opacity: 0.3 }}>📄</div>
           <div style={{ fontSize: 14, fontWeight: 600, color: ink, marginBottom: 4 }}>{label}</div>
-          <div style={{ fontSize: 12, color: muted, marginBottom: 4 }}>Drop PDF here or click to browse</div>
-          <div style={{ fontSize: 11, color: faint }}>PDF files only</div>
+          <div style={{ fontSize: 12, color: muted, marginBottom: 4 }}>Drop file here or click to browse</div>
+          <div style={{ fontSize: 11, color: faint }}>PDF, DOCX, XLSX, or TXT</div>
         </>
       )}
     </div>
@@ -105,6 +105,12 @@ export function UploadPage({ onCompare }: UploadPageProps) {
   const [error, setError] = useState('')
 
   async function handleDrop(type: 'si' | 'bl', file: File) {
+    const isPdf = file.name.toLowerCase().endsWith('.pdf')
+    if (!isPdf) {
+      if (type === 'si') setSi({ file, text: '' })
+      else setBl({ file, text: '' })
+      return
+    }
     setParsing(true)
     setError('')
     try {
@@ -112,7 +118,7 @@ export function UploadPage({ onCompare }: UploadPageProps) {
       if (type === 'si') setSi({ file, text })
       else setBl({ file, text })
     } catch {
-      setError(`Could not parse ${file.name}. Make sure it's a valid PDF.`)
+      setError(`Could not parse ${file.name}. Make sure it's a valid, unencrypted PDF.`)
     } finally {
       setParsing(false)
     }
@@ -136,12 +142,12 @@ export function UploadPage({ onCompare }: UploadPageProps) {
     <div style={{ padding: 28 }}>
       <SectionLabel>Upload & Compare Documents</SectionLabel>
       <h2 style={{ fontFamily: 'Playfair Display, serif', fontSize: 26, fontWeight: 700, color: ink, margin: '0 0 6px' }}>SI vs Bill of Lading</h2>
-      <p style={{ fontSize: 13, color: muted, marginBottom: 28 }}>Upload both documents as PDFs. ShipCheck sends them to the FastAPI AI service to extract and compare the 7 shipping fields using Claude & Vision models.</p>
+      <p style={{ fontSize: 13, color: muted, marginBottom: 28 }}>Upload both documents. ShipCheck sends them to the FastAPI AI service to extract and compare the 7 shipping fields using Claude & Vision models.</p>
 
       {parsing && (
         <div style={{ border: `1px solid ${border}`, borderRadius: 4, background: white, padding: '14px 20px', marginBottom: 20, display: 'flex', alignItems: 'center', gap: 10 }}>
           <Spinner size={16} color={navy} />
-          <span style={{ fontSize: 13, color: muted }}>Parsing PDF…</span>
+          <span style={{ fontSize: 13, color: muted }}>Parsing file…</span>
         </div>
       )}
       {comparing && (

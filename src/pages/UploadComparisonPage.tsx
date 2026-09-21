@@ -51,7 +51,7 @@ export function UploadComparisonPage({ result, siName, blName, onBack }: UploadC
 
       {unextracted.length > 0 && (
         <div style={{ border: `1px solid ${border}`, borderRadius: 4, background: surface, padding: '12px 16px', marginBottom: 20, fontSize: 12, color: muted }}>
-          ℹ {unextracted.length} field{unextracted.length !== 1 ? 's' : ''} could not be extracted — the PDF may use a non-standard format or scanned image text.
+          ℹ {unextracted.length} field{unextracted.length !== 1 ? 's' : ''} could not be extracted — the document may use a non-standard format or scanned image text.
         </div>
       )}
 
