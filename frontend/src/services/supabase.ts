@@ -54,13 +54,18 @@ export function clearSupabaseCustomToken(): void {
 
 /**
  * Returns current access token if logged in with Supabase, or null.
+ * A real Supabase session always wins over the custom cookie - the custom
+ * token exists only to carry identity for the Google-login path (which
+ * never establishes a native Supabase session), and it can outlive the
+ * account that set it (cleared only on explicit logout, up to 30 days
+ * otherwise) - so if a real session exists, trust that over a leftover
+ * cookie from a previous, possibly different, account.
  */
 export async function getSupabaseAccessToken(): Promise<string | null> {
   try {
-    const custom = getSupabaseCustomToken()
-    if (custom) return custom
     const { data: { session } } = await supabase.auth.getSession()
-    return session?.access_token || null
+    if (session?.access_token) return session.access_token
+    return getSupabaseCustomToken()
   } catch {
     return null
   }

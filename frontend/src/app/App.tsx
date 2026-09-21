@@ -250,6 +250,11 @@ export default function App() {
   // "Compare Now" button on EmailDetailPage covers manual retry.
   const autoCompareAttempted = useRef<Set<string>>(new Set())
   useEffect(() => {
+    // Without Gmail connected there are no attachments to fetch - every
+    // attempt would just fail with "not connected", so don't even try
+    // (and don't mark these as attempted - they should auto-compare once
+    // Gmail does get connected, without needing a manual retry).
+    if (!gmailStatus?.connected) return
     const candidates = emails.filter(e =>
       e.type === 'Document Comparison' &&
       e.status === 'New' &&
@@ -260,7 +265,7 @@ export default function App() {
     if (!candidates.length) return
     candidates.forEach(e => autoCompareAttempted.current.add(e.id))
     fetchInBatches(candidates, compareEmailNow, 8)
-  }, [emails, compareEmailNow])
+  }, [emails, compareEmailNow, gmailStatus?.connected])
 
   // Refreshes whether *this* logged-in account has its own Gmail connection
   // configured server-side (each account has its own integration record now
@@ -310,6 +315,14 @@ export default function App() {
       })
       return { ok: true, newCount }
     } catch (err: any) {
+      // Not having Gmail connected is a deliberate, expected state for an
+      // account that hasn't set it up yet - not a backend failure, so it
+      // shouldn't show as a red error banner. InboxPage/Dashboard render
+      // their own calm "Connect Gmail" prompt from gmailStatus instead.
+      const isNotConnected = /gmail is not connected/i.test(err.message || '')
+      if (isNotConnected) {
+        return { ok: false, newCount: 0 }
+      }
       // A client-side timeout doesn't mean the sync failed - the backend
       // keeps classifying in its thread pool regardless of whether this
       // request gave up waiting, so it likely finished; the data just
@@ -396,6 +409,11 @@ export default function App() {
   }
 
   function handleSupabaseLogin(userInfo: UserInfo) {
+    // A standard login has its own real Supabase session, which already
+    // takes priority (see getSupabaseAccessToken) - but clear any leftover
+    // custom-token cookie from an earlier Google login too, so there's no
+    // stale identity sitting around regardless.
+    clearSupabaseCustomToken()
     setUser(userInfo)
     setPage('dashboard')
     loadGmailEmails()
@@ -550,6 +568,8 @@ export default function App() {
               loadMoreNotice={loadMoreNotice}
               onUploadEml={handleUploadEml}
               comparingIds={comparingIds}
+              gmailConnected={gmailStatus?.connected}
+              onGoToSettings={() => setPage('settings')}
             />
           )}
           {page === 'email-detail' && selectedEmail && (

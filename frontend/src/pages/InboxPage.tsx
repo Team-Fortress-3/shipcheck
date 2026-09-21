@@ -95,6 +95,8 @@ interface InboxPageProps {
   loadMoreNotice?: string | null
   onUploadEml?: (file: File) => void | Promise<void>
   comparingIds?: Set<string>
+  gmailConnected?: boolean
+  onGoToSettings?: () => void
 }
 
 export function InboxPage({
@@ -110,6 +112,8 @@ export function InboxPage({
   loadMoreNotice,
   onUploadEml,
   comparingIds,
+  gmailConnected,
+  onGoToSettings,
 }: InboxPageProps) {
   const [search, setSearch] = useState('')
   const [filters, setFilters] = useState<FilterState>(DEFAULT_FILTER_STATE)
@@ -202,6 +206,24 @@ export function InboxPage({
           </div>
           {onClearError && (
             <button onClick={onClearError} style={{ background: 'none', border: 'none', color: '#991B1B', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>✕ Dismiss</button>
+          )}
+        </div>
+      )}
+
+      {/* Gmail not connected - a deliberate state for this account, not an error */}
+      {gmailConnected === false && (
+        <div style={{ background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 4, padding: '12px 18px', marginBottom: 20, display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#1E40AF', fontWeight: 500 }}>
+            <span style={{ fontSize: 14 }}>ℹ</span>
+            <span>Gmail isn't connected to this account yet - connect it to sync and auto-compare your inbox.</span>
+          </div>
+          {onGoToSettings && (
+            <button
+              onClick={onGoToSettings}
+              style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', padding: '6px 14px', background: navy, color: white, border: 'none', borderRadius: 4, cursor: 'pointer' }}
+            >
+              Connect Gmail
+            </button>
           )}
         </div>
       )}
