@@ -134,3 +134,7 @@ export function LogoutIcon() {
   )
 }
 
+export { Skeleton, InboxSkeleton, DashboardSkeleton, ReviewSkeleton } from './Skeleton'
+export type { SkeletonProps } from './Skeleton'
+
+

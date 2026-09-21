@@ -93,8 +93,10 @@ export default function App() {
           }
         }
 
-        // Only load user's cached emails if an authenticated session exists!
+        // Unblock auth checking immediately if a user is found so the skeleton layout renders
         if (activeUser) {
+          setAuthChecking(false)
+          setLoading(true)
           try {
             const cached = await getCachedEmailsApi(100)
             if (cached && cached.length > 0) {
@@ -102,11 +104,14 @@ export default function App() {
             }
           } catch {
             // Backend offline or no cached records yet
+          } finally {
+            setLoading(false)
           }
+        } else {
+          setAuthChecking(false)
         }
       } catch (err) {
         console.error('Session check failed:', err)
-      } finally {
         setAuthChecking(false)
       }
     }
@@ -239,6 +244,7 @@ export default function App() {
   async function handleGoogleLogin(t: string) {
     setGmailToken(t)
     setPage('dashboard')
+    setLoading(true)
     let u: UserInfo = { email: 'user@gmail.com', name: 'Google User', provider: 'google' }
     try {
       u = await getUserInfo(t)
@@ -273,6 +279,7 @@ export default function App() {
   function handleSupabaseLogin(userInfo: UserInfo) {
     setUser(userInfo)
     setPage('dashboard')
+    setLoading(true)
     // Fetch cached emails for this user from Postgres
     getCachedEmailsApi(50)
       .then(cached => {
@@ -283,6 +290,9 @@ export default function App() {
       .catch(err => {
         console.error('Failed to load cached emails:', err)
         setApiError(err.message || 'Failed to load cached emails from backend.')
+      })
+      .finally(() => {
+        setLoading(false)
       })
   }
 
@@ -356,6 +366,7 @@ export default function App() {
             <InboxPage
               emails={emails}
               onSelect={selectEmail}
+              loading={loading}
               classifying={classifying}
               onClassify={() => syncEmailsWithBackend(emails)}
               apiError={apiError}
@@ -386,6 +397,7 @@ export default function App() {
             <ReviewPage
               emails={emails}
               onSelect={id => { setSelectedReviewId(id); setPage('review-detail') }}
+              loading={loading}
             />
           )}
           {page === 'review-detail' && (

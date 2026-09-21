@@ -10,15 +10,20 @@ import {
   amberBg,
   amberBdr,
 } from '../constants/tokens'
-import { SectionLabel } from '../components/primitives'
+import { SectionLabel, ReviewSkeleton } from '../components/primitives'
 import type { GmailEmail } from '../types'
 
 interface ReviewPageProps {
   emails: GmailEmail[]
   onSelect: (id: string) => void
+  loading?: boolean
 }
 
-export function ReviewPage({ emails, onSelect }: ReviewPageProps) {
+export function ReviewPage({ emails, onSelect, loading }: ReviewPageProps) {
+  if (loading && emails.length === 0) {
+    return <ReviewSkeleton />
+  }
+
   const reviewItems = emails.filter(e => e.status === 'Needs Review')
 
   return (

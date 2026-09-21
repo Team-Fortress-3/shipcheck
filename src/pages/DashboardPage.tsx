@@ -13,7 +13,7 @@ import {
   amberBdr,
   green,
 } from '../constants/tokens'
-import { SectionLabel, Badge, Spinner } from '../components/primitives'
+import { SectionLabel, Badge, Spinner, DashboardSkeleton } from '../components/primitives'
 
 interface DashboardPageProps {
   emails: GmailEmail[]
@@ -43,6 +43,10 @@ export function DashboardPage({
   const review = emails.filter(e => e.status === 'Needs Review')
   const attention = emails.filter(e => e.status === 'Mismatch' || e.status === 'Needs Review')
   const progressPercent = classifying?.total ? Math.round((classifying.current / classifying.total) * 100) : 0
+
+  if (loading && emails.length === 0) {
+    return <DashboardSkeleton greeting={greeting} firstName={firstName} />
+  }
 
   return (
     <div style={{ padding: 28, flex: 1 }}>

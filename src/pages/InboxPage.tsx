@@ -11,7 +11,7 @@ import {
   faint,
   amber,
 } from '../constants/tokens'
-import { SectionLabel, Badge, Spinner, SearchIcon } from '../components/primitives'
+import { SectionLabel, Badge, Spinner, SearchIcon, InboxSkeleton } from '../components/primitives'
 
 const CATEGORY_ORDER = ['Document Comparison', 'New SI Request', 'Invoice Query', 'General', 'Spam'] as const
 const ALL_CLASSIFICATIONS = ['Document Comparison', 'New SI Request', 'Invoice Query', 'General', 'Spam'] as const
@@ -199,6 +199,7 @@ function FilterDropdown({ filters, onChange }: { filters: InboxFilters; onChange
 interface InboxPageProps {
   emails: GmailEmail[]
   onSelect: (id: string) => void
+  loading?: boolean
   classifying?: ClassifyingState
   onClassify?: () => void
   apiError?: string | null
@@ -211,6 +212,7 @@ interface InboxPageProps {
 export function InboxPage({
   emails,
   onSelect,
+  loading,
   classifying,
   onClassify,
   apiError,
@@ -221,6 +223,10 @@ export function InboxPage({
 }: InboxPageProps) {
   const [search, setSearch] = useState('')
   const [filters, setFilters] = useState<InboxFilters>(DEFAULT_FILTERS)
+
+  if (loading && emails.length === 0) {
+    return <InboxSkeleton />
+  }
 
   const isFiltered = search || filters.classifications.length || filters.blStatuses.length || filters.senderSearch
 

@@ -40,6 +40,29 @@ body {
   transform-origin: center center;
 }
 
+/* Skeleton shimmer placeholder animation */
+@keyframes skeleton-shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.skeleton-shimmer {
+  background: linear-gradient(90deg, #EBE7DE 0%, #F5F3EC 50%, #EBE7DE 100%);
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.8s infinite ease-in-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton-shimmer {
+    animation: none;
+    background: #EBE7DE;
+  }
+}
+
 
 /* App shell / scrolling
  * The browser is the single vertical scroll container. The sidebar and top bar
