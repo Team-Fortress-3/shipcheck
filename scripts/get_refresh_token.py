@@ -19,14 +19,17 @@ CLIENT_ID = (
     os.environ.get("GMAIL_CLIENT_ID")
     or os.environ.get("GOOGLE_CLIENT_ID")
     or os.environ.get("VITE_GOOGLE_CLIENT_ID")
-    or "465391239386-dresvhvqpvmvu14i2khbbhi9fm00fjkl.apps.googleusercontent.com"
 )
 CLIENT_SECRET = (
     os.environ.get("GMAIL_CLIENT_SECRET")
     or os.environ.get("GOOGLE_CLIENT_SECRET")
     or os.environ.get("VITE_GOOGLE_CLIENT_SECRET")
-    or "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"
 )
+
+if not CLIENT_ID or not CLIENT_SECRET:
+    print("GMAIL_CLIENT_ID and GMAIL_CLIENT_SECRET must be set in backend/.env")
+    print("(rotate the client secret in Google Cloud Console first if it was ever committed to source control)")
+    sys.exit(1)
 
 PORT = 8088
 REDIRECT_URI = f"http://localhost:{PORT}/callback"

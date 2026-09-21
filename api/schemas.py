@@ -4,6 +4,7 @@ Pydantic schemas directly matching the ShipCheck React frontend TypeScript contr
 from datetime import datetime
 from typing import List, Optional, Literal, Dict, Any
 from pydantic import BaseModel, Field
+from api.models import EmailRecord
 
 # Matches TypeScript union types from frontend
 EmailType = Literal[
@@ -102,7 +103,7 @@ class EmailSyncRequest(BaseModel):
 
 class EmailSyncResponse(BaseModel):
     """Response returned after server-side Gmail sync."""
-    emails: List[EmailRecordCreate]
+    emails: List[EmailRecord]
     next_page_token: Optional[str] = None
     synced_count: int
     new_records: int
@@ -114,11 +115,17 @@ class GoogleAuthCodeRequest(BaseModel):
     redirect_uri: Optional[str] = Field(default="postmessage", description="Redirect URI used during code request")
 
 
+class EmailAttachmentsResponse(BaseModel):
+    """Filenames of a Gmail message's attachments (no bytes)."""
+    filenames: List[str]
+
+
 class GmailIntegrationStatus(BaseModel):
-    """Status of server-side Gmail integration."""
+    """Status of server-side Gmail integration. Deliberately never includes
+    the raw access/refresh token - clients only need to know whether a
+    connection exists, not the credential itself."""
     connected: bool
     account_email: Optional[str] = None
-    access_token: Optional[str] = None
     last_sync_at: Optional[datetime] = None
 
 

@@ -39,19 +39,25 @@ def to_utc(dt: Optional[datetime]) -> Optional[datetime]:
 
 
 def get_oauth_credentials() -> Tuple[str, str]:
-    """Returns (client_id, client_secret) from environment."""
+    """Returns (client_id, client_secret) from environment. No hardcoded
+    fallback - these are real OAuth credentials and must come from .env
+    (which is gitignored), never from source."""
     client_id = (
         os.environ.get("GMAIL_CLIENT_ID")
         or os.environ.get("GOOGLE_CLIENT_ID")
         or os.environ.get("VITE_GOOGLE_CLIENT_ID")
-        or "465391239386-dresvhvqpvmvu14i2khbbhi9fm00fjkl.apps.googleusercontent.com"
     )
     client_secret = (
         os.environ.get("GMAIL_CLIENT_SECRET")
         or os.environ.get("GOOGLE_CLIENT_SECRET")
         or os.environ.get("VITE_GOOGLE_CLIENT_SECRET")
-        or "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"
     )
+    if not client_id or not client_secret:
+        raise RuntimeError(
+            "Gmail OAuth credentials are not configured. Set GMAIL_CLIENT_ID and "
+            "GMAIL_CLIENT_SECRET in backend/.env (rotate the client secret in Google "
+            "Cloud Console first if it was ever committed to source control)."
+        )
     return client_id, client_secret
 
 
@@ -300,6 +306,87 @@ def check_for_attachments(payload: dict) -> bool:
         if check_for_attachments(p):
             return True
     return False
+
+
+def extract_attachment_refs(payload: dict) -> List[Tuple[str, str]]:
+    """Recursively walks the MIME tree and returns [(filename, attachmentId), ...]."""
+    refs: List[Tuple[str, str]] = []
+
+    def walk(node: dict):
+        if not node:
+            return
+        filename = node.get("filename")
+        attachment_id = node.get("body", {}).get("attachmentId")
+        if filename and attachment_id:
+            refs.append((filename, attachment_id))
+        for part in node.get("parts", []):
+            walk(part)
+
+    walk(payload)
+    return refs
+
+
+async def list_message_attachment_names(session: Session, message_id: str) -> List[str]:
+    """Lists a message's attachment filenames without downloading their bytes -
+    cheap enough to call just to show what's actually attached in the UI."""
+    token = await get_valid_access_token(session)
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        msg_resp = await client.get(
+            f"{GMAIL_API_BASE}/messages/{message_id}?format=full",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        if not msg_resp.is_success:
+            raise RuntimeError(f"Failed to fetch message {message_id} ({msg_resp.status_code}): {msg_resp.text}")
+        payload = msg_resp.json().get("payload", {})
+        return [filename for filename, _ in extract_attachment_refs(payload)]
+
+
+async def fetch_message_attachments(session: Session, message_id: str) -> List[Tuple[str, bytes]]:
+    """
+    Fetches all attachments for a Gmail message using the server's authorized
+    connection - lets any team member trigger a comparison without needing
+    their own personal Gmail login/token.
+    Returns [(filename, raw_bytes), ...].
+    """
+    token = await get_valid_access_token(session)
+
+    async with httpx.AsyncClient(timeout=25.0) as client:
+        msg_resp = await client.get(
+            f"{GMAIL_API_BASE}/messages/{message_id}?format=full",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        if not msg_resp.is_success:
+            raise RuntimeError(f"Failed to fetch message {message_id} ({msg_resp.status_code}): {msg_resp.text}")
+
+        payload = msg_resp.json().get("payload", {})
+        refs = extract_attachment_refs(payload)
+        if not refs:
+            return []
+
+        async def fetch_one(filename: str, attachment_id: str) -> Tuple[str, bytes]:
+            r = await client.get(
+                f"{GMAIL_API_BASE}/messages/{message_id}/attachments/{attachment_id}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            if not r.is_success:
+                raise RuntimeError(f"Failed to fetch attachment {filename} ({r.status_code}): {r.text}")
+            data_str = r.json().get("data", "")
+            return filename, decode_base64_url_bytes(data_str)
+
+        import asyncio
+        results = await asyncio.gather(*[fetch_one(f, aid) for f, aid in refs])
+        return list(results)
+
+
+def decode_base64_url_bytes(data_str: str) -> bytes:
+    """Decodes a Gmail URL-safe base64 string into raw bytes (not text - for
+    binary attachments, unlike decode_base64_url which assumes UTF-8 text)."""
+    try:
+        padding = "=" * ((4 - len(data_str) % 4) % 4)
+        clean = data_str.replace("-", "+").replace("_", "/") + padding
+        return base64.b64decode(clean)
+    except Exception:
+        return b""
 
 
 # ─── Inbox Fetching Engine ───────────────────────────────────────────────────

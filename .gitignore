@@ -3,6 +3,9 @@ api key.txt
 *.env
 .env
 
+# Local dev database (auto-recreated on startup, per-developer)
+shipcheck.db
+
 # Python
 __pycache__/
 *.py[cod]

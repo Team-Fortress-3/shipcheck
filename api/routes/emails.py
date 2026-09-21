@@ -5,10 +5,11 @@ Provides instant (<10ms) loading from SQLite and intelligent caching.
 import asyncio
 import hashlib
 import logging
+import mimetypes
 from concurrent.futures import ThreadPoolExecutor
 from email.utils import parseaddr
 from typing import List, Optional
-from fastapi import APIRouter, Depends, Query, UploadFile, File
+from fastapi import APIRouter, Depends, Query, UploadFile, File, HTTPException, Response
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select, or_
 from api.db import get_session
@@ -17,11 +18,15 @@ from api.schemas import (
     EmailRecordCreate,
     EmailSyncRequest,
     EmailSyncResponse,
+    EmailAttachmentsResponse,
     GoogleAuthCodeRequest,
     GmailIntegrationStatus,
+    CompareResponse,
 )
 from api.gmail_service import (
     fetch_gmail_inbox_messages,
+    fetch_message_attachments,
+    list_message_attachment_names,
     exchange_auth_code_for_tokens,
     get_refresh_token,
     get_integration_record,
@@ -39,9 +44,11 @@ router = APIRouter(prefix="/emails", tags=["Emails"])
 _classifier = EmailClassifier()
 
 # Shared thread pool for running the blocking classify() calls concurrently
-# without blocking FastAPI's event loop. Reused across requests rather than
-# created fresh each time. Lower this if you see rate-limit (429) errors.
-_classify_executor = ThreadPoolExecutor(max_workers=8)
+# without blocking FastAPI's event loop. Reused across requests (and shared
+# across all concurrent /api/emails/batch calls, not one pool per request)
+# rather than created fresh each time. Lower this if you see rate-limit
+# (429) errors from OpenRouter.
+_classify_executor = ThreadPoolExecutor(max_workers=20)
 
 
 def _classify_sync(item: EmailRecordCreate):
@@ -81,12 +88,12 @@ async def get_emails(
     Allows the frontend to load inbox instantly (<10ms) without hitting Gmail or LLMs.
     """
     stmt = select(EmailRecord)
-    if user_id:
+    if user_id == "demo":
+        # Demo/unauthenticated traffic should also see legacy records that
+        # predate auth (user_id IS NULL) - not just strictly user_id="demo".
+        stmt = stmt.where(or_(EmailRecord.user_id == user_id, EmailRecord.user_id.is_(None)))
+    elif user_id:
         stmt = stmt.where(EmailRecord.user_id == user_id)
-        if user_id == "demo":
-            stmt = stmt.where((EmailRecord.user_id == "demo") | (EmailRecord.user_id == None))
-        else:
-            stmt = stmt.where(EmailRecord.user_id == user_id)
     if email_type:
         stmt = stmt.where(EmailRecord.email_type == email_type)
     if status:
@@ -113,10 +120,11 @@ async def batch_sync_emails(
         return []
 
     # 1. Fetch all existing records for this user in one query
-    # 1. Fetch all existing records in one query
     email_ids = [e.id for e in emails]
     stmt = select(EmailRecord).where(EmailRecord.id.in_(email_ids))
-    if user_id:
+    if user_id == "demo":
+        stmt = stmt.where(or_(EmailRecord.user_id == user_id, EmailRecord.user_id.is_(None)))
+    elif user_id:
         stmt = stmt.where(EmailRecord.user_id == user_id)
     existing_records = {rec.id: rec for rec in session.exec(stmt).all()}
 
@@ -223,6 +231,7 @@ async def batch_sync_emails(
     return [results_by_id[item.id] for item in emails if item.id in results_by_id]
 @router.post("/eml", response_model=EmailRecord, summary="Upload a raw .eml file into the inbox")
 async def upload_eml(
+    response: Response,
     file: UploadFile = File(..., description="Raw .eml email file"),
     user_id: Optional[str] = Depends(get_current_user_id),
     session: Session = Depends(get_session),
@@ -263,6 +272,10 @@ async def upload_eml(
 
     existing = session.get(EmailRecord, email_id)
     if existing and existing.status and existing.status != "Processing":
+        # Same file content (id is a hash of the raw bytes) was already
+        # uploaded - tell the frontend so it can say so instead of the
+        # upload silently appearing to do nothing.
+        response.headers["X-Eml-Duplicate"] = "true"
         return existing
 
     loop = asyncio.get_event_loop()
@@ -309,7 +322,6 @@ async def get_gmail_status(
     return GmailIntegrationStatus(
         connected=bool(refresh_tok),
         account_email=record.account_email if record else None,
-        access_token=record.access_token if record else None,
         last_sync_at=record.last_sync_at if record else None,
     )
 
@@ -324,7 +336,6 @@ async def connect_server_gmail(
         return GmailIntegrationStatus(
             connected=True,
             account_email=record.account_email,
-            access_token=record.access_token,
             last_sync_at=record.last_sync_at,
         )
     except Exception as e:
@@ -353,7 +364,10 @@ async def sync_gmail_inbox(
     except Exception as e:
         logger.error(f"Server-side Gmail fetch failed: {e}")
         from fastapi import HTTPException
-        raise HTTPException(status_code=502, detail=f"Failed to fetch from Gmail: {str(e)}")
+        # Not 502 - the frontend treats 502/504 as "our own backend is down"
+        # and replaces the detail with a generic message, which would hide
+        # the actual Gmail error here.
+        raise HTTPException(status_code=500, detail=f"Failed to fetch from Gmail: {str(e)}")
 
     if not raw_items:
         return EmailSyncResponse(
@@ -373,8 +387,79 @@ async def sync_gmail_inbox(
     new_count = sum(1 for r in synced_records if r.updated_at == r.created_at)
 
     return EmailSyncResponse(
-        emails=creates,
+        emails=synced_records,
         next_page_token=next_page,
         synced_count=len(synced_records),
         new_records=new_count,
     )
+
+
+@router.get("/{email_id}/attachments", response_model=EmailAttachmentsResponse, summary="List a Gmail message's attachment filenames")
+async def list_email_attachments(
+    email_id: str,
+    session: Session = Depends(get_session),
+) -> EmailAttachmentsResponse:
+    """Lists attachment filenames (not bytes) via the shared server-side Gmail connection."""
+    if email_id.startswith("eml_"):
+        return EmailAttachmentsResponse(filenames=[])
+    try:
+        filenames = await list_message_attachment_names(session, email_id)
+        return EmailAttachmentsResponse(filenames=filenames)
+    except Exception as e:
+        logger.error(f"Failed to list attachments for {email_id} from Gmail: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to list attachments from Gmail: {str(e)}")
+
+
+@router.get("/{email_id}/attachments/{filename}/download", summary="Download one of a Gmail message's attachments")
+async def download_email_attachment(
+    email_id: str,
+    filename: str,
+    session: Session = Depends(get_session),
+) -> Response:
+    """Downloads a single attachment's raw bytes via the shared server-side Gmail connection."""
+    if email_id.startswith("eml_"):
+        raise HTTPException(status_code=400, detail="This email was uploaded directly - no Gmail attachment to download.")
+    try:
+        attachments = await fetch_message_attachments(session, email_id)
+    except Exception as e:
+        logger.error(f"Failed to fetch attachment '{filename}' for {email_id} from Gmail: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch attachment from Gmail: {str(e)}")
+
+    match = next((raw for name, raw in attachments if name == filename), None)
+    if match is None:
+        raise HTTPException(status_code=404, detail=f"Attachment '{filename}' not found on this email.")
+
+    content_type, _ = mimetypes.guess_type(filename)
+    return Response(
+        content=match,
+        media_type=content_type or "application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.post("/{email_id}/compare-from-gmail", response_model=CompareResponse, summary="Auto-compare a Gmail message's attachments via the server-side connection")
+async def compare_email_from_gmail(
+    email_id: str,
+    user_id: Optional[str] = Depends(get_current_user_id),
+    session: Session = Depends(get_session),
+) -> CompareResponse:
+    """
+    Fetches an email's attachments using the shared server-side Gmail
+    connection (not the caller's own browser token) and runs the SI/BL
+    auto-compare pipeline. Lets any team member trigger a comparison
+    without needing their own personal Gmail login.
+    """
+    if email_id.startswith("eml_"):
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="This email was uploaded directly, not synced from Gmail - it has no Gmail message to fetch attachments from.")
+    try:
+        attachments = await fetch_message_attachments(session, email_id)
+    except Exception as e:
+        logger.error(f"Failed to fetch attachments for {email_id} from Gmail: {e}")
+        from fastapi import HTTPException
+        # Not 502 - the frontend treats 502/504 as "our own backend is down"
+        # and replaces the detail with a generic message, which would hide
+        # the actual Gmail error here.
+        raise HTTPException(status_code=500, detail=f"Failed to fetch attachments from Gmail: {str(e)}")
+
+    return run_comparison_for_attachments(session, attachments, email_id, user_id)

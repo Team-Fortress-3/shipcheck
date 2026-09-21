@@ -71,7 +71,11 @@ class EmailClassifier:
         "SPAM": "Unsolicited advertising, promotional campaigns, phishing, or scams"
     }
 
-    DEFAULT_INSTRUCTIONS = "Which category best classifies this inbound email?"
+    DEFAULT_INSTRUCTIONS = (
+        "Which category best classifies this inbound email for a shipping "
+        "operations team? Judge by what the email is actually asking for RIGHT "
+        "NOW, not by which shipping-related keywords appear in it."
+    )
 
     def __init__(
         self,
