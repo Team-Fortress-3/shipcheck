@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import type { Page, GmailEmail, UserInfo, ComparisonField, ClassifyingState } from '../types'
 import { bg, CRUMBS } from '../constants/tokens'
 import { Sidebar } from '../components/layout/Sidebar'
@@ -36,6 +36,8 @@ export default function App() {
   const [gmailToken, setGmailToken] = useState<string | null>(null)
   const [user, setUser] = useState<UserInfo | null>(null)
   const [emails, setEmails] = useState<GmailEmail[]>([])
+  const emailsRef = useRef<GmailEmail[]>(emails)
+  emailsRef.current = emails
   const [loading, setLoading] = useState(false)
   const [loadingMore, setLoadingMore] = useState(false)
   const [nextPageToken, setNextPageToken] = useState<string | null>(null)
@@ -190,7 +192,7 @@ export default function App() {
       setNextPageToken(res.nextPageToken || null)
 
       // Identify emails that are NOT yet in the cache/database
-      const knownIds = new Set(cached.map(e => e.id))
+      const knownIds = new Set([...cached.map(e => e.id), ...emailsRef.current.map(e => e.id)])
       const trulyNew = res.emails.filter(item => !knownIds.has(item.id))
 
       if (trulyNew.length > 0) {
@@ -217,20 +219,15 @@ export default function App() {
       const res = await fetchEmailsPage(gmailToken, nextPageToken, 25)
       setNextPageToken(res.nextPageToken || null)
 
-      let trulyNew: GmailEmail[] = []
-      setEmails(prev => {
-        const existingMap = new Map(prev.map(e => [e.id, e]))
-        const fresh: GmailEmail[] = []
-        for (const item of res.emails) {
-          if (!existingMap.has(item.id)) {
-            fresh.push(item)
-          }
-        }
-        trulyNew = fresh
-        return [...fresh, ...prev]
-      })
+      const existingIds = new Set(emailsRef.current.map(e => e.id))
+      const trulyNew = res.emails.filter(item => !existingIds.has(item.id))
 
       if (trulyNew.length > 0) {
+        setEmails(prev => {
+          const currentIds = new Set(prev.map(e => e.id))
+          const fresh = trulyNew.filter(item => !currentIds.has(item.id))
+          return [...fresh, ...prev]
+        })
         syncEmailsWithBackend(trulyNew)
       }
     } catch (err: any) {
