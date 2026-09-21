@@ -128,7 +128,7 @@ export default function App() {
     try {
       await syncEmailBatchProgressive(
         targets,
-        (syncedItem, originalItem) => {
+        (syncedItem) => {
           setClassifying(prev => ({ ...prev, current: prev.current + 1 }))
           setEmails(prev => {
             const exists = prev.some(e => e.id === syncedItem.id)
@@ -148,6 +148,8 @@ export default function App() {
             error: msg,
           }))
           setApiError(msg)
+          // Revert status so item isn't stuck in 'Processing'
+          setEmails(prev => prev.map(e => e.id === originalItem.id ? { ...e, status: e.status === 'Processing' ? 'New' : e.status } : e))
         },
         2
       )
@@ -183,25 +185,17 @@ export default function App() {
       setNextPageToken(res.nextPageToken || null)
 
       // Identify emails that are NOT yet in the cache/database
-      setEmails(prev => {
-        const knownMap = new Map(prev.map(e => [e.id, e]))
-        const trulyNew: GmailEmail[] = []
+      const knownIds = new Set(cached.map(e => e.id))
+      const trulyNew = res.emails.filter(item => !knownIds.has(item.id))
 
-        for (const item of res.emails) {
-          if (!knownMap.has(item.id)) {
-            trulyNew.push(item)
-          }
-        }
-
-        // If there are truly new emails, sync ONLY those new ones
-        if (trulyNew.length > 0) {
-          const combined = [...trulyNew, ...prev]
-          syncEmailsWithBackend(trulyNew)
-          return combined
-        }
-
-        return prev
-      })
+      if (trulyNew.length > 0) {
+        setEmails(prev => {
+          const currentIds = new Set(prev.map(e => e.id))
+          const fresh = trulyNew.filter(item => !currentIds.has(item.id))
+          return [...fresh, ...prev]
+        })
+        syncEmailsWithBackend(trulyNew)
+      }
     } catch (err: any) {
       setApiError(`Failed to fetch emails: ${err.message || String(err)}`)
     } finally {
@@ -218,21 +212,22 @@ export default function App() {
       const res = await fetchEmailsPage(gmailToken, nextPageToken, 25)
       setNextPageToken(res.nextPageToken || null)
 
+      let trulyNew: GmailEmail[] = []
       setEmails(prev => {
         const existingMap = new Map(prev.map(e => [e.id, e]))
-        const combined = [...prev]
-        const trulyNew: GmailEmail[] = []
+        const fresh: GmailEmail[] = []
         for (const item of res.emails) {
           if (!existingMap.has(item.id)) {
-            combined.push(item)
-            trulyNew.push(item)
+            fresh.push(item)
           }
         }
-        if (trulyNew.length > 0) {
-          syncEmailsWithBackend(trulyNew)
-        }
-        return combined
+        trulyNew = fresh
+        return [...fresh, ...prev]
       })
+
+      if (trulyNew.length > 0) {
+        syncEmailsWithBackend(trulyNew)
+      }
     } catch (err: any) {
       setApiError(`Failed to load more emails: ${err.message || String(err)}`)
     } finally {

@@ -180,15 +180,23 @@ async function extractErrorDetail(res: Response): Promise<string> {
  */
 export async function classifyEmailApi(req: EmailClassifyRequest): Promise<EmailClassifyResponse> {
   let res: Response
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 15000)
   try {
     const headers = await getAuthHeaders({ 'Content-Type': 'application/json' })
     res = await fetch(`${API_BASE}/api/classify`, {
       method: 'POST',
       headers,
       body: JSON.stringify(req),
+      signal: controller.signal,
     })
   } catch (err: any) {
+    if (err?.name === 'AbortError') {
+      throw new Error('Classification request timed out after 15s.')
+    }
     throw new Error('FastAPI backend service is offline. Please verify the backend service is running.')
+  } finally {
+    clearTimeout(timer)
   }
 
   if (!res.ok) {
@@ -209,15 +217,23 @@ export async function compareFilesApi(siFile: File, blFile: File): Promise<Compa
   formData.append('bl_file', blFile)
 
   let res: Response
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 45000)
   try {
     const headers = await getAuthHeaders()
     res = await fetch(`${API_BASE}/api/compare`, {
       method: 'POST',
       headers,
       body: formData,
+      signal: controller.signal,
     })
-  } catch {
+  } catch (err: any) {
+    if (err?.name === 'AbortError') {
+      throw new Error('Document comparison timed out after 45s.')
+    }
     throw new Error('FastAPI backend service is offline. Please verify the backend service is running.')
+  } finally {
+    clearTimeout(timer)
   }
 
   if (!res.ok) {
@@ -233,15 +249,23 @@ export async function compareFilesApi(siFile: File, blFile: File): Promise<Compa
  */
 export async function compareTextApi(siText: string, blText: string): Promise<CompareResponse> {
   let res: Response
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 30000)
   try {
     const headers = await getAuthHeaders({ 'Content-Type': 'application/json' })
     res = await fetch(`${API_BASE}/api/compare/text`, {
       method: 'POST',
       headers,
       body: JSON.stringify({ si_text: siText, bl_text: blText }),
+      signal: controller.signal,
     })
-  } catch {
+  } catch (err: any) {
+    if (err?.name === 'AbortError') {
+      throw new Error('Comparison request timed out after 30s.')
+    }
     throw new Error('FastAPI backend service is offline. Please verify the backend service is running.')
+  } finally {
+    clearTimeout(timer)
   }
 
   if (!res.ok) {
@@ -294,13 +318,21 @@ export async function getCachedEmailsApi(limit = 50, offset = 0, emailType?: str
   if (status) params.append('status', status)
 
   let res: Response
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 12000)
   try {
     const headers = await getAuthHeaders()
     res = await fetch(`${API_BASE}/api/emails?${params.toString()}`, {
       headers,
+      signal: controller.signal,
     })
-  } catch {
+  } catch (err: any) {
+    if (err?.name === 'AbortError') {
+      throw new Error('Timed out fetching cached emails from database.')
+    }
     throw new Error('FastAPI backend service is offline. Please verify the backend service is running.')
+  } finally {
+    clearTimeout(timer)
   }
 
   if (!res.ok) {
@@ -320,15 +352,23 @@ export async function getCachedEmailsApi(limit = 50, offset = 0, emailType?: str
 export async function syncEmailBatchApi(emails: any[]): Promise<any[]> {
   const payload = emails.map(e => mapGmailEmailToCreatePayload(e))
   let res: Response
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 18000)
   try {
     const headers = await getAuthHeaders({ 'Content-Type': 'application/json' })
     res = await fetch(`${API_BASE}/api/emails/batch`, {
       method: 'POST',
       headers,
       body: JSON.stringify(payload),
+      signal: controller.signal,
     })
-  } catch {
+  } catch (err: any) {
+    if (err?.name === 'AbortError') {
+      throw new Error('Batch sync timed out after 18s.')
+    }
     throw new Error('FastAPI backend service is offline. Please verify the backend service is running.')
+  } finally {
+    clearTimeout(timer)
   }
 
   if (!res.ok) {
