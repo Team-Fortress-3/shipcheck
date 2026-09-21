@@ -62,6 +62,16 @@ app.include_router(comparisons.router)
 app.include_router(health.router)
 
 
+@app.get("/v1/models", summary="Compatibility endpoint for local AI model discovery")
+async def list_models():
+    return {
+        "object": "list",
+        "data": [
+            {"id": "shipcheck-classifier", "object": "model", "owned_by": "shipcheck"}
+        ]
+    }
+
+
 @app.get("/", summary="Root status and documentation link")
 async def root():
     return {
