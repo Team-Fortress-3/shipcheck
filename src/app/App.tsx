@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import type { Page, GmailEmail, UserInfo, ComparisonField, ClassifyingState } from '../types'
-import { bg, CRUMBS, MOCK_EMAILS } from '../constants/tokens'
+import { bg, CRUMBS } from '../constants/tokens'
 import { Sidebar } from '../components/layout/Sidebar'
 import { TopBar } from '../components/layout/TopBar'
 import {
@@ -56,15 +56,17 @@ export default function App() {
   useEffect(() => {
     async function checkSession() {
       try {
+        let activeUser: UserInfo | null = null
         const { data: { session } } = await supabase.auth.getSession()
         if (session?.user) {
           const u = session.user
-          setUser({
+          activeUser = {
             id: u.id,
             email: u.email || '',
             name: u.user_metadata?.full_name || u.email?.split('@')[0] || 'User',
             provider: 'supabase',
-          })
+          }
+          setUser(activeUser)
         } else {
           // Check if custom Supabase JWT is in cookie
           const customToken = getSupabaseCustomToken()
@@ -74,13 +76,14 @@ export default function App() {
               const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/')
               const payload = JSON.parse(decodeURIComponent(atob(base64).split('').map(c => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)).join('')))
               if (payload.exp * 1000 > Date.now()) {
-                setUser({
+                activeUser = {
                   id: payload.sub,
                   email: payload.email,
                   name: payload.user_metadata?.full_name || payload.email.split('@')[0],
                   picture: payload.user_metadata?.avatar_url,
                   provider: 'google',
-                })
+                }
+                setUser(activeUser)
               } else {
                 clearSupabaseCustomToken()
               }
@@ -90,14 +93,16 @@ export default function App() {
           }
         }
 
-        // Load user's cached emails from Supabase Postgres
-        try {
-          const cached = await getCachedEmailsApi(50)
-          if (cached && cached.length > 0) {
-            setEmails(cached)
+        // Only load user's cached emails if an authenticated session exists!
+        if (activeUser) {
+          try {
+            const cached = await getCachedEmailsApi(100)
+            if (cached && cached.length > 0) {
+              setEmails(cached)
+            }
+          } catch {
+            // Backend offline or no cached records yet
           }
-        } catch {
-          // Backend offline or no cached records yet
         }
       } catch (err) {
         console.error('Session check failed:', err)
@@ -280,14 +285,10 @@ export default function App() {
           setEmails(cached)
         }
       })
-      .catch(() => {})
-  }
-
-  function handleDemo() {
-    setUser({ email: 'demo@averis.com', name: 'Demo User', provider: 'demo' })
-    setEmails(MOCK_EMAILS)
-    setNextPageToken(null)
-    setPage('dashboard')
+      .catch(err => {
+        console.error('Failed to load cached emails:', err)
+        setApiError(err.message || 'Failed to load cached emails from backend.')
+      })
   }
 
   async function handleLogout() {
@@ -316,13 +317,12 @@ export default function App() {
     return <div style={{ minHeight: '100vh', background: bg }} />
   }
 
-  // If not logged in and has no data, show LoginPage
-  if (!user && !gmailToken && !emails.length) {
+  // If not logged in, always show LoginPage
+  if (!user) {
     return (
       <LoginPage
         onGoogleLogin={handleGoogleLogin}
         onSupabaseLogin={handleSupabaseLogin}
-        onDemo={handleDemo}
       />
     )
   }
@@ -381,13 +381,28 @@ export default function App() {
             <ProcessingPage onDone={() => setPage('comparison')} />
           )}
           {page === 'comparison' && (
-            <ComparisonPage onBack={() => setPage('email-detail')} />
+            <ComparisonPage
+              onBack={() => setPage('email-detail')}
+              onGoToUpload={() => setPage('upload')}
+              subject={selectedEmail?.subject}
+            />
           )}
           {page === 'review' && (
-            <ReviewPage onSelect={id => { setSelectedReviewId(id); setPage('review-detail') }} />
+            <ReviewPage
+              emails={emails}
+              onSelect={id => { setSelectedReviewId(id); setPage('review-detail') }}
+            />
           )}
           {page === 'review-detail' && (
-            <ReviewDetailPage id={selectedReviewId} onBack={() => setPage('review')} />
+            <ReviewDetailPage
+              id={selectedReviewId}
+              emails={emails}
+              onBack={() => setPage('review')}
+              onResolve={(id, status) => {
+                setEmails(prev => prev.map(e => e.id === id ? { ...e, status } : e))
+                setPage('review')
+              }}
+            />
           )}
           {page === 'reports' && (
             <ReportsPage />

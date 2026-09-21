@@ -78,12 +78,6 @@ export function classify(subject: string, snippet: string, body: string): EmailT
   return 'General'
 }
 
-export function mockStatus(type: EmailType, id: string): EmailStatus {
-  if (type !== 'Document Comparison') return 'Classified'
-  const h = id.charCodeAt(id.length - 1) % 4
-  return h === 0 ? 'Mismatch' : h === 1 ? 'Needs Review' : h === 2 ? 'Match' : 'New'
-}
-
 export function fmtDate(ts: number) {
   const d = new Date(ts), now = new Date()
   if (d.toDateString() === now.toDateString()) return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })

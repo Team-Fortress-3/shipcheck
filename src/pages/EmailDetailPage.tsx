@@ -13,19 +13,6 @@ import {
 } from '../constants/tokens'
 import { SectionLabel, Badge } from '../components/primitives'
 
-function AttRow({ name, warn }: { name: string; warn?: boolean }) {
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 12px', border: `1px solid ${warn ? amberBdr : borderLight}`, borderRadius: 4, background: warn ? amberBg : surface }}>
-      <span style={{ color: '#DC2626', fontSize: 16 }}>📄</span>
-      <span style={{ fontSize: 12, fontWeight: 500, color: ink, flex: 1 }}>{name}</span>
-      {warn
-        ? <span style={{ fontSize: 10, fontWeight: 700, color: amber, textTransform: 'uppercase', letterSpacing: '0.06em' }}>⚠ Unreadable</span>
-        : <span style={{ fontSize: 10, fontWeight: 700, color: navy, textTransform: 'uppercase', letterSpacing: '0.06em', cursor: 'pointer' }}>View</span>
-      }
-    </div>
-  )
-}
-
 interface EmailDetailPageProps {
   email: GmailEmail
   onBack: () => void
@@ -60,9 +47,12 @@ export function EmailDetailPage({ email, onBack, onProcess }: EmailDetailPagePro
       {email.hasAttachments && (
         <div style={{ border: `1px solid ${border}`, borderRadius: 4, background: white, padding: '20px 24px', marginBottom: 16 }}>
           <SectionLabel>Attachments</SectionLabel>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <AttRow name="Shipping_Instruction.pdf" />
-            {isDoc && <AttRow name="Draft_Bill_of_Lading.pdf" warn={email.status === 'Needs Review'} />}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', border: `1px solid ${borderLight}`, borderRadius: 4, background: surface }}>
+            <span style={{ fontSize: 16 }}>📎</span>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: ink }}>Attachments detected on message</div>
+              <div style={{ fontSize: 11, color: muted }}>Shipping documents are attached to this message thread.</div>
+            </div>
           </div>
         </div>
       )}

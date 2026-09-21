@@ -11,30 +11,36 @@ import {
 import { SectionLabel, Badge } from '../components/primitives'
 import { getComparisonsApi, type ComparisonRecord } from '../services/api'
 
-const DEFAULT_REPORTS = [
-  { id: 'h1', subject: 'RE: Draft BL for Shipment #48291', type: 'Document Comparison', result: 'Mismatch', date: '20 Sep 2026' },
-  { id: 'h2', subject: 'RE: BL Confirmation #48288', type: 'Document Comparison', result: 'Match', date: '20 Sep 2026' },
-  { id: 'h3', subject: 'Invoice #39281', type: 'Invoice Query', result: 'Classified', date: '20 Sep 2026' },
-  { id: 'h4', subject: 'New SI – Order #047', type: 'New SI Request', result: 'Classified', date: '19 Sep 2026' },
-  { id: 'h5', subject: 'Draft BL #48285', type: 'Document Comparison', result: 'Match', date: '19 Sep 2026' },
-]
-
 export function ReportsPage() {
   const [dbComparisons, setDbComparisons] = useState<ComparisonRecord[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
+    setLoading(true)
+    setError(null)
     getComparisonsApi(50)
       .then(data => {
-        if (data && data.length > 0) {
-          setDbComparisons(data)
-        }
+        setDbComparisons(data || [])
       })
-      .catch(() => {})
+      .catch(err => {
+        console.error('Failed to load comparison reports:', err)
+        setError(err.message || 'Failed to connect to comparison reports service.')
+      })
+      .finally(() => setLoading(false))
   }, [])
 
   return (
     <div style={{ padding: 28 }}>
       <SectionLabel>Processing History & Reports</SectionLabel>
+
+      {error && (
+        <div style={{ background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 4, padding: '12px 18px', marginBottom: 20, display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, color: '#991B1B', fontWeight: 500 }}>
+          <span style={{ fontSize: 16 }}>⚠</span>
+          <span><strong>Failed to load reports:</strong> {error}</span>
+        </div>
+      )}
+
       <div style={{ border: `1px solid ${border}`, borderRadius: 4, overflow: 'hidden', background: white }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
           <thead>
@@ -45,7 +51,13 @@ export function ReportsPage() {
             </tr>
           </thead>
           <tbody>
-            {dbComparisons.length > 0 ? (
+            {loading ? (
+              <tr>
+                <td colSpan={4} style={{ padding: '36px 20px', textAlign: 'center', color: muted, fontSize: 13 }}>
+                  Loading comparison reports…
+                </td>
+              </tr>
+            ) : dbComparisons.length > 0 ? (
               dbComparisons.map((c, i) => (
                 <tr key={c.id} style={{ borderBottom: i < dbComparisons.length - 1 ? `1px solid ${borderLight}` : 'none' }}>
                   <td style={{ padding: '13px 20px', fontWeight: 500, color: ink }}>
@@ -59,14 +71,11 @@ export function ReportsPage() {
                 </tr>
               ))
             ) : (
-              DEFAULT_REPORTS.map((r, i) => (
-                <tr key={r.id} style={{ borderBottom: i < DEFAULT_REPORTS.length - 1 ? `1px solid ${borderLight}` : 'none' }}>
-                  <td style={{ padding: '13px 20px', fontWeight: 500, color: ink }}>{r.subject}</td>
-                  <td style={{ padding: '13px 20px' }}><Badge label={r.type} /></td>
-                  <td style={{ padding: '13px 20px' }}><Badge label={r.result} /></td>
-                  <td style={{ padding: '13px 20px', fontSize: 11, color: faint }}>{r.date}</td>
-                </tr>
-              ))
+              <tr>
+                <td colSpan={4} style={{ padding: '48px 20px', textAlign: 'center', color: muted, fontSize: 13 }}>
+                  No comparison reports found. Use <strong>Upload & Compare</strong> to process documents and generate reports.
+                </td>
+              </tr>
             )}
           </tbody>
         </table>

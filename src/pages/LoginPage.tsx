@@ -53,10 +53,9 @@ function GoogleLoginButton({ onLogin }: { onLogin: (token: string) => void }) {
 interface LoginPageProps {
   onGoogleLogin: (token: string) => void
   onSupabaseLogin: (user: UserInfo) => void
-  onDemo: () => void
 }
 
-export function LoginPage({ onGoogleLogin, onSupabaseLogin, onDemo }: LoginPageProps) {
+export function LoginPage({ onGoogleLogin, onSupabaseLogin }: LoginPageProps) {
   const [tab, setTab] = useState<'signin' | 'signup'>('signin')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -271,25 +270,6 @@ export function LoginPage({ onGoogleLogin, onSupabaseLogin, onDemo }: LoginPageP
                 Google OAuth Client ID not configured.
               </div>
             )}
-
-            <button
-              type="button"
-              onClick={onDemo}
-              style={{
-                width: '100%',
-                padding: '10px 16px',
-                background: 'transparent',
-                color: muted,
-                border: `1px dashed ${border}`,
-                borderRadius: 4,
-                fontSize: 11,
-                fontWeight: 600,
-                letterSpacing: '0.04em',
-                cursor: 'pointer',
-              }}
-            >
-              Continue with Demo Data (No Setup Required)
-            </button>
           </div>
 
           {/* Scope note */}
