@@ -10,7 +10,13 @@ distinguishable signals:
     attempt the vision fallback (render page -> image -> Claude vision)
     before giving up.
 """
-from formats import READERS_BY_EXT, read_pdf
+try:
+    from core.readers.formats import READERS_BY_EXT, read_pdf
+except ImportError:
+    try:
+        from readers.formats import READERS_BY_EXT, read_pdf
+    except ImportError:
+        from formats import READERS_BY_EXT, read_pdf
 
 
 class UnreadableAttachment(Exception):

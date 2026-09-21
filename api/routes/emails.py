@@ -8,12 +8,24 @@ import logging
 from concurrent.futures import ThreadPoolExecutor
 from email.utils import parseaddr
 from typing import List, Optional
-from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
+from fastapi import APIRouter, Depends, Query, UploadFile, File
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select, or_
 from api.db import get_session
 from api.models import EmailRecord, utc_now
-from api.schemas import EmailRecordCreate
+from api.schemas import (
+    EmailRecordCreate,
+    EmailSyncRequest,
+    EmailSyncResponse,
+    GoogleAuthCodeRequest,
+    GmailIntegrationStatus,
+)
+from api.gmail_service import (
+    fetch_gmail_inbox_messages,
+    exchange_auth_code_for_tokens,
+    get_refresh_token,
+    get_integration_record,
+)
 from api.routes.classify import classify_text_heuristic
 from api.adapter import build_classify_response, map_category_to_email_type
 from api.auth import get_current_user_id
@@ -27,11 +39,9 @@ router = APIRouter(prefix="/emails", tags=["Emails"])
 _classifier = EmailClassifier()
 
 # Shared thread pool for running the blocking classify() calls concurrently
-# without blocking FastAPI's event loop. Reused across requests (and shared
-# across all concurrent /api/emails/batch calls, not one pool per request)
-# rather than created fresh each time. Lower this if you see rate-limit
-# (429) errors from OpenRouter.
-_classify_executor = ThreadPoolExecutor(max_workers=20)
+# without blocking FastAPI's event loop. Reused across requests rather than
+# created fresh each time. Lower this if you see rate-limit (429) errors.
+_classify_executor = ThreadPoolExecutor(max_workers=8)
 
 
 def _classify_sync(item: EmailRecordCreate):
@@ -71,10 +81,12 @@ async def get_emails(
     Allows the frontend to load inbox instantly (<10ms) without hitting Gmail or LLMs.
     """
     stmt = select(EmailRecord)
-    if user_id == "demo":
-        stmt = stmt.where(or_(EmailRecord.user_id == user_id, EmailRecord.user_id.is_(None)))
-    elif user_id:
+    if user_id:
         stmt = stmt.where(EmailRecord.user_id == user_id)
+        if user_id == "demo":
+            stmt = stmt.where((EmailRecord.user_id == "demo") | (EmailRecord.user_id == None))
+        else:
+            stmt = stmt.where(EmailRecord.user_id == user_id)
     if email_type:
         stmt = stmt.where(EmailRecord.email_type == email_type)
     if status:
@@ -101,11 +113,10 @@ async def batch_sync_emails(
         return []
 
     # 1. Fetch all existing records for this user in one query
+    # 1. Fetch all existing records in one query
     email_ids = [e.id for e in emails]
     stmt = select(EmailRecord).where(EmailRecord.id.in_(email_ids))
-    if user_id == "demo":
-        stmt = stmt.where(or_(EmailRecord.user_id == user_id, EmailRecord.user_id.is_(None)))
-    elif user_id:
+    if user_id:
         stmt = stmt.where(EmailRecord.user_id == user_id)
     existing_records = {rec.id: rec for rec in session.exec(stmt).all()}
 
@@ -114,9 +125,22 @@ async def batch_sync_emails(
 
     # Pass 1: figure out which items are already cached vs need classifying
     for item in emails:
+        effective_user_id = item.user_id or user_id
         if item.id in existing_records:
             rec = existing_records[item.id]
-            if rec.status and rec.status != "Processing":
+            user_matches = (
+                rec.user_id == effective_user_id
+                or not rec.user_id
+                or not effective_user_id
+                or effective_user_id == "demo"
+            )
+            if user_matches and rec.status and rec.status != "Processing":
+                # Claim record for authenticated user if previously unassigned
+                if not rec.user_id and effective_user_id and effective_user_id != "demo":
+                    rec.user_id = effective_user_id
+                    session.add(rec)
+                    session.commit()
+                    session.refresh(rec)
                 results_by_id[item.id] = rec
                 continue
         needs_classify.append(item)
@@ -197,8 +221,6 @@ async def batch_sync_emails(
 
     # Return in the same order the request came in, per this endpoint's contract
     return [results_by_id[item.id] for item in emails if item.id in results_by_id]
-
-
 @router.post("/eml", response_model=EmailRecord, summary="Upload a raw .eml file into the inbox")
 async def upload_eml(
     file: UploadFile = File(..., description="Raw .eml email file"),
@@ -276,3 +298,83 @@ async def upload_eml(
         session.refresh(rec)
 
     return rec
+
+
+@router.get("/gmail-status", response_model=GmailIntegrationStatus, summary="Check server-side Gmail integration status")
+async def get_gmail_status(
+    session: Session = Depends(get_session),
+) -> GmailIntegrationStatus:
+    record = get_integration_record(session)
+    refresh_tok = get_refresh_token(session)
+    return GmailIntegrationStatus(
+        connected=bool(refresh_tok),
+        account_email=record.account_email if record else None,
+        access_token=record.access_token if record else None,
+        last_sync_at=record.last_sync_at if record else None,
+    )
+
+
+@router.post("/connect-gmail", response_model=GmailIntegrationStatus, summary="Connect server-side Gmail with Google auth code")
+async def connect_server_gmail(
+    req: GoogleAuthCodeRequest,
+    session: Session = Depends(get_session),
+) -> GmailIntegrationStatus:
+    try:
+        record = await exchange_auth_code_for_tokens(session, req.code, req.redirect_uri)
+        return GmailIntegrationStatus(
+            connected=True,
+            account_email=record.account_email,
+            access_token=record.access_token,
+            last_sync_at=record.last_sync_at,
+        )
+    except Exception as e:
+        logger.error(f"Failed to connect Gmail integration: {e}")
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/sync", response_model=EmailSyncResponse, summary="Sync latest messages from Gmail via server token")
+async def sync_gmail_inbox(
+    req: EmailSyncRequest,
+    user_id: Optional[str] = Depends(get_current_user_id),
+    session: Session = Depends(get_session),
+) -> EmailSyncResponse:
+    """
+    Syncs messages directly from Gmail using the server-side OAuth refresh token.
+    Deduplicates against the database, auto-classifies new messages, and saves them.
+    Available to all team members without needing personal Google logins in the browser.
+    """
+    try:
+        raw_items, next_page = await fetch_gmail_inbox_messages(
+            session=session,
+            page_token=req.page_token,
+            max_results=req.max_results,
+        )
+    except Exception as e:
+        logger.error(f"Server-side Gmail fetch failed: {e}")
+        from fastapi import HTTPException
+        raise HTTPException(status_code=502, detail=f"Failed to fetch from Gmail: {str(e)}")
+
+    if not raw_items:
+        return EmailSyncResponse(
+            emails=[],
+            next_page_token=next_page,
+            synced_count=0,
+            new_records=0,
+        )
+
+    # Convert to EmailRecordCreate schemas
+    creates = [EmailRecordCreate(**item, user_id=user_id) for item in raw_items]
+
+    # Run through batch sync pipeline (deduplicate, classify, persist)
+    synced_records = await batch_sync_emails(creates, user_id=user_id, session=session)
+
+    # Count how many were newly created
+    new_count = sum(1 for r in synced_records if r.updated_at == r.created_at)
+
+    return EmailSyncResponse(
+        emails=creates,
+        next_page_token=next_page,
+        synced_count=len(synced_records),
+        new_records=new_count,
+    )

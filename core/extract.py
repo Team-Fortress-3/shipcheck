@@ -73,10 +73,11 @@ Instructions or draft Bills of Lading). Documents differ in layout and label \
 wording between companies — e.g. "Port of Loading", "POL", and "Load Port" all \
 mean the same field. Match fields by MEANING, not exact label text.
 
-If a field is genuinely not present anywhere in the document, return null for \
-it. Do not guess or fabricate a value. When a total is available alongside \
-per-item breakdowns (e.g. total gross weight vs per-container weight), use the \
-TOTAL.
+If a field is genuinely not present anywhere in the document, is blank, or \
+contains a placeholder like 'TBA', 'TBD', 'N/A', or underscores, return null \
+for it. Do not guess, fabricate, or return '<UNKNOWN>' as a string value. When \
+a total is available alongside per-item breakdowns (e.g. total gross weight vs \
+per-container weight), use the TOTAL.
 
 For shipper, consignee, and notify_party: always extract the FULL text block \
 under that label, including any address lines, as one string. Be consistent \

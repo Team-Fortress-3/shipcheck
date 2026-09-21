@@ -46,3 +46,17 @@ class ComparisonRecord(SQLModel, table=True):
     reviewed_by: Optional[str] = None
     created_at: datetime = Field(default_factory=utc_now)
 
+
+class EmailIntegration(SQLModel, table=True):
+    """Stores shared Gmail integration tokens for server-side syncing."""
+    id: str = Field(default="primary", primary_key=True)
+    provider: str = Field(default="gmail")
+    account_email: Optional[str] = None
+    refresh_token: str
+    access_token: Optional[str] = None
+    access_token_expires_at: Optional[datetime] = None
+    last_sync_at: Optional[datetime] = None
+    next_page_token: Optional[str] = None
+    updated_at: datetime = Field(default_factory=utc_now)
+
+

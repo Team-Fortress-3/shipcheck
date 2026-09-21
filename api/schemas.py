@@ -94,6 +94,34 @@ class ComparisonReviewUpdate(BaseModel):
     status: Optional[EmailStatus] = None
 
 
+class EmailSyncRequest(BaseModel):
+    """Payload to trigger server-side sync with Gmail."""
+    page_token: Optional[str] = Field(default=None, description="Optional Gmail pageToken for pagination")
+    max_results: int = Field(default=25, ge=1, le=100)
+
+
+class EmailSyncResponse(BaseModel):
+    """Response returned after server-side Gmail sync."""
+    emails: List[EmailRecordCreate]
+    next_page_token: Optional[str] = None
+    synced_count: int
+    new_records: int
+
+
+class GoogleAuthCodeRequest(BaseModel):
+    """Payload to exchange Google OAuth authorization code for server refresh token."""
+    code: str = Field(..., description="Google OAuth authorization code")
+    redirect_uri: Optional[str] = Field(default="postmessage", description="Redirect URI used during code request")
+
+
+class GmailIntegrationStatus(BaseModel):
+    """Status of server-side Gmail integration."""
+    connected: bool
+    account_email: Optional[str] = None
+    access_token: Optional[str] = None
+    last_sync_at: Optional[datetime] = None
+
+
 class HealthResponse(BaseModel):
     """Health check payload."""
     status: str
