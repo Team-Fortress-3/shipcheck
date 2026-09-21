@@ -8,7 +8,7 @@ import {
   muted,
   faint,
 } from '../constants/tokens'
-import { SectionLabel, Badge, SearchInput } from '../components/primitives'
+import { Badge, SearchInput } from '../components/primitives'
 import { FilterDropdown, DEFAULT_FILTER_STATE, type FilterState } from '../components/FilterDropdown'
 import { getComparisonsApi, type ComparisonRecord } from '../services/api'
 import { fmtDate } from '../utils/date'
@@ -53,8 +53,6 @@ export function ReportsPage() {
 
   return (
     <div style={{ padding: 28 }}>
-      <SectionLabel>Processing History & Reports</SectionLabel>
-
       {error && (
         <div style={{ background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 4, padding: '12px 18px', marginBottom: 20, display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, color: '#991B1B', fontWeight: 500 }}>
           <span style={{ fontSize: 16 }}>⚠</span>
@@ -62,7 +60,7 @@ export function ReportsPage() {
         </div>
       )}
 
-      <div style={{ display: 'flex', gap: 10, marginBottom: 20, alignItems: 'center' }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginBottom: 20, alignItems: 'center' }}>
         <SearchInput value={search} onChange={setSearch} placeholder="Search reports…" />
         <FilterDropdown filters={filters} onChange={setFilters} showClassifications={false} showSender={false} />
         {isFiltered && (
@@ -93,7 +91,7 @@ export function ReportsPage() {
             ) : processed.length > 0 ? (
               processed.map((c, i) => (
                 <tr key={c.id} style={{ borderBottom: i < processed.length - 1 ? `1px solid ${borderLight}` : 'none' }}>
-                  <td style={{ padding: '13px 20px', fontWeight: 500, color: ink }}>
+                  <td style={{ padding: '13px 20px', fontWeight: 500, color: ink, maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {c.si_name || 'Shipping Instruction'} vs {c.bl_name || 'Bill of Lading'}
                   </td>
                   <td style={{ padding: '13px 20px' }}><Badge label="Document Comparison" /></td>

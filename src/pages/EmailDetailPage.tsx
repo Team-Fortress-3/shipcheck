@@ -52,7 +52,7 @@ export function EmailDetailPage({ email, onBack, onProcess, isComparing, gmailCo
       <div style={{ border: `1px solid ${border}`, borderRadius: 4, background: white, padding: '24px 28px', marginBottom: 16 }}>
         <h2 style={{ fontFamily: 'Playfair Display, serif', fontSize: 24, fontWeight: 700, color: ink, margin: '0 0 18px' }}>{email.subject}</h2>
         <div style={{ display: 'grid', gridTemplateColumns: '60px 1fr', gap: '8px 12px', fontSize: 14, marginBottom: 16 }}>
-          <span style={{ color: muted, fontWeight: 600, fontSize: 11, letterSpacing: '0.1em', textTransform: 'uppercase', paddingTop: 2 }}>From</span><span style={{ color: ink }}>{email.fromName} &lt;{email.from}&gt;</span>
+          <span style={{ color: muted, fontWeight: 600, fontSize: 11, letterSpacing: '0.1em', textTransform: 'uppercase', paddingTop: 2 }}>From</span><span style={{ color: ink, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{email.fromName} &lt;{email.from}&gt;</span>
           <span style={{ color: muted, fontWeight: 600, fontSize: 11, letterSpacing: '0.1em', textTransform: 'uppercase', paddingTop: 2 }}>Date</span><span style={{ color: ink }}>{email.date}</span>
         </div>
         <div style={{ display: 'flex', gap: 6, paddingTop: 12, borderTop: `1px solid ${borderLight}` }}>
@@ -107,7 +107,7 @@ export function EmailDetailPage({ email, onBack, onProcess, isComparing, gmailCo
               ⚠ {compareError}
             </div>
           )}
-          <div style={{ border: `1px solid ${border}`, borderRadius: 4, background: '#EEF2FF', padding: '16px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div style={{ border: `1px solid ${border}`, borderRadius: 4, background: '#EEF2FF', padding: '16px 24px', display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
             <div>
               <div style={{ fontSize: 13, fontWeight: 700, color: '#1E1B4B' }}>Compare SI vs Bill of Lading</div>
               <div style={{ fontSize: 11, color: '#3730A3', marginTop: 2 }}>

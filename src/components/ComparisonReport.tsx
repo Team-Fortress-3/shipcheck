@@ -32,10 +32,10 @@ export function ComparisonReport({ fields, siName, blName, subject, summary }: C
 
   return (
     <>
-      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 20, gap: 16 }}>
-        <div>
-          <h2 style={{ fontFamily: 'Playfair Display, serif', fontSize: 26, fontWeight: 700, color: ink, margin: '0 0 6px' }}>{subject || 'BL Comparison'}</h2>
-          <p style={{ fontSize: 12, color: muted, margin: 0 }}>{siName || 'Shipping_Instruction.pdf'} · {blName || 'Draft_Bill_of_Lading.pdf'}</p>
+      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 20, gap: 16 }}>
+        <div style={{ minWidth: 0 }}>
+          <h2 style={{ fontFamily: 'Playfair Display, serif', fontSize: 26, fontWeight: 700, color: ink, margin: '0 0 6px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{subject || 'BL Comparison'}</h2>
+          <p style={{ fontSize: 12, color: muted, margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{siName || 'Shipping_Instruction.pdf'} · {blName || 'Draft_Bill_of_Lading.pdf'}</p>
           {summary && <p style={{ fontSize: 12, color: muted, marginTop: 6, lineHeight: 1.5 }}>{summary}</p>}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 16px', background: mismatches.length > 0 ? amberBg : '#DCFCE7', border: `1px solid ${mismatches.length > 0 ? amberBdr : '#86EFAC'}`, borderRadius: 4, fontSize: 12, fontWeight: 700, color: mismatches.length > 0 ? '#92400E' : green, whiteSpace: 'nowrap' }}>
@@ -78,7 +78,7 @@ export function ComparisonReport({ fields, siName, blName, subject, summary }: C
           {mismatches.map(f => (
             <div key={f.field} style={{ padding: '20px 24px' }}>
               <div style={{ fontSize: 13, fontWeight: 700, color: ink, marginBottom: 12 }}>{f.field}</div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12 }}>
                 <div style={{ padding: '16px 20px', border: `1px solid ${border}`, borderRadius: 4, background: surface }}>
                   <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.14em', textTransform: 'uppercase', color: muted, marginBottom: 8 }}>Shipping Instruction</div>
                   <div style={{ fontFamily: 'Playfair Display, serif', fontSize: 32, fontWeight: 700, color: navy }}>{f.si}</div>

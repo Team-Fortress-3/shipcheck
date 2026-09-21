@@ -38,10 +38,48 @@ import { UploadComparisonPage } from '../pages/UploadComparisonPage'
 import { SettingsPage } from '../pages/SettingsPage'
 
 const GMAIL_TOKEN_STORAGE_KEY = 'shipcheck_gmail_token'
+const PAGE_STORAGE_KEY = 'shipcheck_page'
+const SELECTED_EMAIL_STORAGE_KEY = 'shipcheck_selected_email_id'
+const SELECTED_REVIEW_STORAGE_KEY = 'shipcheck_selected_review_id'
+const UPLOAD_RESULT_STORAGE_KEY = 'shipcheck_upload_result'
+
+const RESTORABLE_PAGES: Page[] = [
+  'dashboard', 'inbox', 'email-detail', 'comparison', 'review',
+  'review-detail', 'reports', 'upload', 'upload-comparison', 'settings',
+]
 
 function readStoredGmailToken(): string | null {
   try {
     return sessionStorage.getItem(GMAIL_TOKEN_STORAGE_KEY)
+  } catch {
+    return null
+  }
+}
+
+// Which page/detail-item the user was on survives a refresh via
+// sessionStorage, the same way the Gmail token already does - so reloading
+// the tab doesn't unexpectedly bounce back to the dashboard.
+function readStoredPage(): Page {
+  try {
+    const raw = sessionStorage.getItem(PAGE_STORAGE_KEY) as Page | null
+    return raw && RESTORABLE_PAGES.includes(raw) ? raw : 'dashboard'
+  } catch {
+    return 'dashboard'
+  }
+}
+
+function readStoredId(key: string): string {
+  try {
+    return sessionStorage.getItem(key) || ''
+  } catch {
+    return ''
+  }
+}
+
+function readStoredUploadResult(): { fields: ComparisonField[]; siName: string; blName: string } | null {
+  try {
+    const raw = sessionStorage.getItem(UPLOAD_RESULT_STORAGE_KEY)
+    return raw ? JSON.parse(raw) : null
   } catch {
     return null
   }
@@ -69,10 +107,33 @@ export default function App() {
   const [loading, setLoading] = useState(false)
   const [loadingMore, setLoadingMore] = useState(false)
   const [nextPageToken, setNextPageToken] = useState<string | null>(null)
-  const [page, setPage] = useState<Page>('dashboard')
-  const [selectedEmailId, setSelectedEmailId] = useState('')
-  const [selectedReviewId, setSelectedReviewId] = useState('')
-  const [uploadResult, setUploadResult] = useState<{ fields: ComparisonField[]; siName: string; blName: string } | null>(null)
+  const [page, setPage] = useState<Page>(readStoredPage)
+  const [selectedEmailId, setSelectedEmailId] = useState(() => readStoredId(SELECTED_EMAIL_STORAGE_KEY))
+  const [selectedReviewId, setSelectedReviewId] = useState(() => readStoredId(SELECTED_REVIEW_STORAGE_KEY))
+  const [uploadResult, setUploadResult] = useState<{ fields: ComparisonField[]; siName: string; blName: string } | null>(readStoredUploadResult)
+
+  // Persist navigation state across reloads (mirrors the Gmail token pattern above).
+  useEffect(() => {
+    try { sessionStorage.setItem(PAGE_STORAGE_KEY, page) } catch { /* sessionStorage unavailable */ }
+  }, [page])
+  useEffect(() => {
+    try {
+      if (selectedEmailId) sessionStorage.setItem(SELECTED_EMAIL_STORAGE_KEY, selectedEmailId)
+      else sessionStorage.removeItem(SELECTED_EMAIL_STORAGE_KEY)
+    } catch { /* sessionStorage unavailable */ }
+  }, [selectedEmailId])
+  useEffect(() => {
+    try {
+      if (selectedReviewId) sessionStorage.setItem(SELECTED_REVIEW_STORAGE_KEY, selectedReviewId)
+      else sessionStorage.removeItem(SELECTED_REVIEW_STORAGE_KEY)
+    } catch { /* sessionStorage unavailable */ }
+  }, [selectedReviewId])
+  useEffect(() => {
+    try {
+      if (uploadResult) sessionStorage.setItem(UPLOAD_RESULT_STORAGE_KEY, JSON.stringify(uploadResult))
+      else sessionStorage.removeItem(UPLOAD_RESULT_STORAGE_KEY)
+    } catch { /* sessionStorage unavailable */ }
+  }, [uploadResult])
   const [classifying, setClassifying] = useState<ClassifyingState>({
     active: false,
     current: 0,
@@ -358,6 +419,7 @@ export default function App() {
     setPage('dashboard')
     setSelectedEmailId('')
     setSelectedReviewId('')
+    setUploadResult(null)
   }
 
   function selectEmail(id: string) {

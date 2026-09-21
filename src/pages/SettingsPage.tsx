@@ -51,15 +51,15 @@ export function SettingsPage({
         <SectionLabel>Account Profile</SectionLabel>
         <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginTop: 12, marginBottom: 20 }}>
           {user?.picture ? (
-            <img src={user.picture} style={{ width: 48, height: 48, borderRadius: '50%', border: `1px solid ${border}` }} alt="" />
+            <img src={user.picture} style={{ width: 48, height: 48, borderRadius: '50%', border: `1px solid ${border}`, flexShrink: 0 }} alt="" />
           ) : (
-            <div style={{ width: 48, height: 48, borderRadius: '50%', background: navy, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, fontWeight: 700, color: white }}>
+            <div style={{ width: 48, height: 48, borderRadius: '50%', background: navy, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, fontWeight: 700, color: white, flexShrink: 0 }}>
               {user?.name?.[0] || 'U'}
             </div>
           )}
-          <div>
-            <div style={{ fontSize: 16, fontWeight: 600, color: ink }}>{user?.name || 'User'}</div>
-            <div style={{ fontSize: 13, color: muted }}>{user?.email || '—'}</div>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 16, fontWeight: 600, color: ink, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{user?.name || 'User'}</div>
+            <div style={{ fontSize: 13, color: muted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{user?.email || '—'}</div>
             <div style={{ fontSize: 11, color: faint, marginTop: 2 }}>
               Provider: <span style={{ textTransform: 'capitalize', fontWeight: 600 }}>{user?.provider || 'Supabase'}</span>
               {user?.id && <span> · ID: {user.id.slice(0, 8)}…</span>}
@@ -67,12 +67,12 @@ export function SettingsPage({
           </div>
         </div>
 
-        <div style={{ borderTop: `1px solid ${borderLight}`, paddingTop: 16, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div style={{ borderTop: `1px solid ${borderLight}`, paddingTop: 16, display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
           <div>
             <div style={{ fontSize: 12, fontWeight: 600, color: ink }}>Session Persistence</div>
             <div style={{ fontSize: 11, color: muted }}>Your session is stored securely in browser cookies and persists across reloads.</div>
           </div>
-          <span style={{ fontSize: 11, fontWeight: 600, color: green, background: greenBg, padding: '3px 8px', borderRadius: 3, border: '1px solid #86EFAC' }}>
+          <span style={{ fontSize: 11, fontWeight: 600, color: green, background: greenBg, padding: '3px 8px', borderRadius: 3, border: '1px solid #86EFAC', whiteSpace: 'nowrap' }}>
             Active Cookie Session
           </span>
         </div>
@@ -92,7 +92,7 @@ export function SettingsPage({
         </div>
 
         {gmailToken ? (
-          <div style={{ background: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: 4, padding: 16, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16 }}>
+          <div style={{ background: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: 4, padding: 16, display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 16 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               <div style={{ width: 10, height: 10, borderRadius: '50%', background: green }} />
               <div>

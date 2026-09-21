@@ -140,7 +140,6 @@ export function UploadPage({ onCompare }: UploadPageProps) {
 
   return (
     <div style={{ padding: 28 }}>
-      <SectionLabel>Upload & Compare Documents</SectionLabel>
       <h2 style={{ fontFamily: 'Playfair Display, serif', fontSize: 26, fontWeight: 700, color: ink, margin: '0 0 6px' }}>SI vs Bill of Lading</h2>
       <p style={{ fontSize: 13, color: muted, marginBottom: 28 }}>Upload both documents. ShipCheck sends them to the FastAPI AI service to extract and compare the 7 shipping fields using Claude & Vision models.</p>
 
@@ -160,7 +159,7 @@ export function UploadPage({ onCompare }: UploadPageProps) {
         <div style={{ border: `1px solid #FECACA`, borderRadius: 4, background: '#FEF2F2', padding: '12px 16px', marginBottom: 20, fontSize: 13, color: '#991B1B' }}>⚠ {error}</div>
       )}
 
-      <div style={{ display: 'flex', gap: 16, marginBottom: 24 }}>
+      <div className="upload-dropzones" style={{ display: 'flex', gap: 16, marginBottom: 24 }}>
         <DropZone label="Shipping Instruction (SI)" doc={si} onDrop={f => handleDrop('si', f)} onClear={() => setSi(null)} />
         <DropZone label="Draft Bill of Lading (BL)" doc={bl} onDrop={f => handleDrop('bl', f)} onClear={() => setBl(null)} />
       </div>

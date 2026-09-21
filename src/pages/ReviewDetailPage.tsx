@@ -108,7 +108,7 @@ export function ReviewDetailPage({ id, emails, user, onBack, onResolve }: Review
 
       <div style={{ border: `1px solid ${border}`, borderRadius: 4, background: white, padding: '20px 24px', marginBottom: 20 }}>
         <SectionLabel>Email Details</SectionLabel>
-        <h3 style={{ fontFamily: 'Playfair Display, serif', fontSize: 20, fontWeight: 700, color: navy, margin: '0 0 10px' }}>{item.subject}</h3>
+        <h3 style={{ fontFamily: 'Playfair Display, serif', fontSize: 20, fontWeight: 700, color: navy, margin: '0 0 10px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.subject}</h3>
         <div style={{ fontSize: 12, color: muted, marginBottom: 12 }}>
           From: <strong style={{ color: ink }}>{item.fromName}</strong> ({item.from}) · Date: {item.date}
         </div>
@@ -147,7 +147,7 @@ export function ReviewDetailPage({ id, emails, user, onBack, onResolve }: Review
         <div style={{ border: `1px solid ${border}`, borderRadius: 4, background: white, padding: '20px 24px' }}>
           <SectionLabel>Resolution Action</SectionLabel>
           <p style={{ fontSize: 12, color: muted, marginBottom: 16 }}>Select an outcome to update the shipment status:</p>
-          <div style={{ display: 'flex', gap: 10 }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
             <button
               onClick={() => handleAction('Match')}
               disabled={!!saving}

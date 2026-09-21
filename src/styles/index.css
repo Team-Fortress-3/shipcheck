@@ -129,6 +129,21 @@ body {
   min-height: 100vh;
 }
 
+.sidebar-collapsible {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.sidebar-backdrop {
+  display: none;
+}
+
+.sidebar-rail-nav {
+  display: none;
+}
+
 .app-topbar {
   position: sticky;
   top: 0;
@@ -139,9 +154,161 @@ body {
   min-height: calc(100vh - 44px);
 }
 
-@media (max-width: 800px) {
+/* Dashboard's Recent Activity + Flagged/Recent Comparisons columns; the
+   right column stacks directly below on narrow screens instead of squeezing
+   into a second column. */
+.dashboard-grid {
+  grid-template-columns: 1fr 320px;
+}
+
+@media (max-width: 860px) {
+  .dashboard-grid {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+/* Mobile: sidebar collapses to a narrow rail showing just the logo. Tapping
+   the logo expands it to the full nav as an overlay; tapping the backdrop
+   (or picking a nav item) collapses it back. Desktop is untouched. */
+@media (max-width: 768px) {
   .app-sidebar {
-    width: 190px;
-    flex-basis: 190px;
+    width: 56px;
+    flex-basis: 56px;
+    overflow: hidden;
+    box-shadow: 2px 0 10px rgba(0, 0, 0, 0.12);
+  }
+
+  /* Expanding lifts the sidebar out of the flex flow into an overlay so it
+     doesn't squeeze .app-main - it floats on top instead. */
+  .app-sidebar.is-expanded {
+    position: fixed;
+    left: 0;
+    top: 0;
+    width: 240px;
+    height: 100vh;
+    overflow: visible;
+    box-shadow: 4px 0 24px rgba(0, 0, 0, 0.25);
+  }
+
+  .app-sidebar .sidebar-collapsible {
+    display: none;
+  }
+
+  .app-sidebar.is-expanded .sidebar-collapsible {
+    display: flex;
+  }
+
+  .sidebar-rail-nav {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    flex: 1;
+    padding: 4px 0;
+  }
+
+  .app-sidebar.is-expanded .sidebar-rail-nav {
+    display: none;
+  }
+
+  .app-sidebar .sidebar-brand-text {
+    display: none;
+  }
+
+  .app-sidebar.is-expanded .sidebar-brand-text {
+    display: block;
+  }
+
+  .sidebar-logo-btn {
+    justify-content: center !important;
+    padding: 20px 0 16px !important;
+  }
+
+  .app-sidebar.is-expanded .sidebar-logo-btn {
+    justify-content: flex-start !important;
+    padding: 28px 20px 20px !important;
+  }
+
+  .sidebar-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.4);
+    z-index: 55;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s ease;
+  }
+
+  .sidebar-backdrop.is-open {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  /* Uniform page padding is too generous on narrow screens */
+  .app-page-content > div {
+    padding: 16px !important;
+  }
+
+  /* Tables: let each card scroll its own table horizontally instead of
+     squeezing/clipping columns or overflowing the whole page. */
+  table {
+    display: block !important;
+    width: auto !important;
+    min-width: 100%;
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Review queue: drop the Sender column and shrink the subject text so
+     Date + the Review button always stay visible without needing to scroll
+     the table sideways to reach the action button. */
+  .review-table th:nth-child(2),
+  .review-table td:nth-child(2) {
+    display: none;
+  }
+
+  .review-table td:first-child {
+    max-width: 130px !important;
+  }
+
+  .review-table th:first-child,
+  .review-table td:first-child,
+  .review-table th:nth-child(3),
+  .review-table td:nth-child(3),
+  .review-table th:last-child,
+  .review-table td:last-child {
+    padding: 12px 8px !important;
+  }
+
+  /* Upload & Compare: SI/BL drop-zones stack instead of squeezing side by side. */
+  .upload-dropzones {
+    flex-direction: column !important;
+  }
+
+  /* Inbox: search takes its own full-width row, filter/upload/clear/count
+     wrap to the row below (the parent row already has flex-wrap: wrap). */
+  .inbox-search {
+    flex-basis: 100% !important;
+    max-width: none !important;
+  }
+
+  /* Filter dropdown panels become a bottom sheet so a 320px popover never
+     runs off the edge of a narrow viewport regardless of trigger position. */
+  .filter-panel {
+    position: fixed !important;
+    left: 12px !important;
+    right: 12px !important;
+    top: auto !important;
+    bottom: 12px !important;
+    width: auto !important;
+    max-height: 75vh;
+    overflow-y: auto;
+  }
+}
+
+@media (max-width: 480px) {
+  .topbar-clock {
+    display: none;
   }
 }

@@ -30,10 +30,10 @@ export function UploadComparisonPage({ result, siName, blName, onBack }: UploadC
     <div style={{ padding: 28 }}>
       <button onClick={onBack} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color: navy, border: `1px solid ${border}`, background: white, cursor: 'pointer', padding: '7px 14px', borderRadius: 4, marginBottom: 24 }}>← Upload New</button>
 
-      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 24 }}>
-        <div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, marginBottom: 24 }}>
+        <div style={{ minWidth: 0 }}>
           <h2 style={{ fontFamily: 'Playfair Display, serif', fontSize: 26, fontWeight: 700, color: ink, margin: '0 0 6px' }}>Comparison Result</h2>
-          <p style={{ fontSize: 12, color: muted, margin: 0 }}>{siName} · {blName}</p>
+          <p style={{ fontSize: 12, color: muted, margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{siName} · {blName}</p>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           {mismatches.length > 0 && (

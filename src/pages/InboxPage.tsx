@@ -13,7 +13,7 @@ import {
   amber,
   red,
 } from '../constants/tokens'
-import { SectionLabel, Badge, Spinner, SearchInput, InboxSkeleton } from '../components/primitives'
+import { Badge, Spinner, SearchInput, InboxSkeleton } from '../components/primitives'
 import { FilterDropdown, DEFAULT_FILTER_STATE, type FilterState } from '../components/FilterDropdown'
 
 // 'Processing' isn't a real EmailType - it's a pseudo-group for emails that
@@ -114,7 +114,17 @@ export function InboxPage({
   const [search, setSearch] = useState('')
   const [filters, setFilters] = useState<FilterState>(DEFAULT_FILTER_STATE)
   const [uploadingEml, setUploadingEml] = useState(false)
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
   const emlInputRef = useRef<HTMLInputElement | null>(null)
+
+  function toggleGroup(cat: string) {
+    setCollapsedGroups(prev => {
+      const next = new Set(prev)
+      if (next.has(cat)) next.delete(cat)
+      else next.add(cat)
+      return next
+    })
+  }
 
   async function handleEmlSelected(file: File | undefined) {
     if (!file || !onUploadEml) return
@@ -148,8 +158,6 @@ export function InboxPage({
 
   return (
     <div style={{ padding: 28 }}>
-      <SectionLabel>Email Inbox</SectionLabel>
-
       {/* Active AI Classification Progress Banner */}
       {classifying?.active && (
         <div style={{ background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 4, padding: '14px 20px', marginBottom: 20 }}>
@@ -199,8 +207,8 @@ export function InboxPage({
       )}
 
       {/* Controls */}
-      <div style={{ display: 'flex', gap: 10, marginBottom: 24, alignItems: 'center' }}>
-        <SearchInput value={search} onChange={setSearch} placeholder="Search emails…" />
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginBottom: 24, alignItems: 'center' }}>
+        <SearchInput className="inbox-search" value={search} onChange={setSearch} placeholder="Search emails…" />
         <FilterDropdown filters={filters} onChange={setFilters} />
         {onUploadEml && (
           <>
@@ -242,14 +250,19 @@ export function InboxPage({
               ? processed.filter(e => e.status === 'Processing')
               : processed.filter(e => e.type === cat && e.status !== 'Processing')
             if (!group.length) return null
+            const collapsed = collapsedGroups.has(cat)
             return (
               <div key={cat}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                <button
+                  onClick={() => toggleGroup(cat)}
+                  style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, width: '100%', border: 'none', background: 'none', cursor: 'pointer', padding: 0, textAlign: 'left' }}
+                >
+                  <span style={{ fontSize: 9, color: muted, transform: collapsed ? 'rotate(-90deg)' : 'none', transition: 'transform 0.15s ease', display: 'inline-block' }}>▼</span>
                   {cat === 'Processing' ? <Spinner size={11} color={muted} /> : <span style={{ color: muted, fontSize: 13 }}>—</span>}
                   <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: muted }}>{cat === 'Processing' ? 'Classifying…' : emailTypeLabel(cat)}</span>
                   <span style={{ fontSize: 11, color: faint }}>({group.length})</span>
-                </div>
-                <EmailTable rows={group} onSelect={onSelect} comparingIds={comparingIds} />
+                </button>
+                {!collapsed && <EmailTable rows={group} onSelect={onSelect} comparingIds={comparingIds} />}
               </div>
             )
           })}

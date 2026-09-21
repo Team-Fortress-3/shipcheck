@@ -10,7 +10,6 @@ import {
   faint,
   amber,
   amberBg,
-  amberBdr,
   green,
   red,
   redBg,
@@ -61,7 +60,7 @@ export function DashboardPage({
         </h1>
 
         {/* Status strip — accent color only on actionable cells */}
-        <div style={{ display: 'flex', alignItems: 'stretch', gap: 0, border: `1px solid ${border}`, borderRadius: 4, overflow: 'hidden', marginBottom: 18 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 1, background: border, border: `1px solid ${border}`, borderRadius: 4, overflow: 'hidden', marginBottom: 18 }}>
           {([
             { label: 'Emails', value: emails.length, sub: loading ? 'Fetching…' : 'in inbox', accent: null, click: () => onNav('inbox') },
             { label: 'Doc Checks', value: docComps.length, sub: `${docComps.filter(e => e.status === 'Match').length} matched`, accent: null, click: () => onNav('inbox') },
@@ -69,7 +68,6 @@ export function DashboardPage({
             { label: 'Needs Review', value: review.length, sub: review.length ? 'Human review' : 'None pending', accent: review.length > 0 ? 'red' : null, click: () => onNav('review') },
           ] as const).map((s, i) => {
             const bg = s.accent === 'amber' ? amberBg : s.accent === 'red' ? redBg : white
-            const bdr = s.accent === 'amber' ? amberBdr : s.accent === 'red' ? red : border
             const line = s.accent === 'amber' ? amber : s.accent === 'red' ? red : navy
             const text = s.accent === 'amber' ? '#92400E' : s.accent === 'red' ? red : navy
             const label = s.accent === 'amber' ? amber : s.accent === 'red' ? red : faint
@@ -77,7 +75,7 @@ export function DashboardPage({
               <button
                 key={i}
                 onClick={s.click}
-                style={{ flex: 1, padding: '12px 18px', border: 'none', background: bg, cursor: 'pointer', textAlign: 'left', borderLeft: i > 0 ? `1px solid ${s.accent ? bdr : border}` : 'none', borderTop: s.accent ? `2px solid ${line}` : '2px solid transparent' }}
+                style={{ padding: '12px 18px', border: 'none', background: bg, cursor: 'pointer', textAlign: 'left', borderTop: s.accent ? `2px solid ${line}` : '2px solid transparent' }}
               >
                 <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: label, marginBottom: 4 }}>{s.label}</div>
                 <div style={{ fontFamily: 'Playfair Display, serif', fontSize: 28, fontWeight: 700, color: text, lineHeight: 1 }}>{s.value}</div>
@@ -122,9 +120,9 @@ export function DashboardPage({
         )}
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 320px', gap: 20 }}>
+      <div className="dashboard-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 320px', gap: 20 }}>
         {/* Recent emails */}
-        <div>
+        <div style={{ minWidth: 0 }}>
           <SectionLabel>Recent Activity</SectionLabel>
           <div style={{ border: `1px solid ${border}`, borderRadius: 4, overflow: 'hidden', background: white }}>
             {emails.length === 0 ? (
@@ -155,8 +153,8 @@ export function DashboardPage({
                       <span style={{ fontSize: 13, fontWeight: 600, color: ink, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '80%' }}>{e.subject}</span>
                       <span style={{ fontSize: 10, color: faint, whiteSpace: 'nowrap', marginLeft: 8 }}>{e.date}</span>
                     </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <span style={{ fontSize: 11, color: muted }}>{e.fromName}</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, overflow: 'hidden' }}>
+                      <span style={{ fontSize: 11, color: muted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flexShrink: 1, minWidth: 0 }}>{e.fromName}</span>
                       {comparingIds?.has(e.id) ? (
                         <Badge label="Comparing" />
                       ) : e.status === 'Processing' ? (
@@ -179,7 +177,7 @@ export function DashboardPage({
         </div>
 
         {/* Right column */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 20, minWidth: 0 }}>
           {/* Flagged items */}
           <div>
             <SectionLabel>Flagged</SectionLabel>

@@ -75,7 +75,7 @@ export function FilterDropdown({
           {/* backdrop */}
           <div style={{ position: 'fixed', inset: 0, zIndex: 99 }} onClick={() => setOpen(false)} />
           {/* panel */}
-          <div style={{ position: 'absolute', top: 'calc(100% + 6px)', left: 0, zIndex: 100, width: 320, background: white, border: `1px solid ${border}`, borderRadius: 6, boxShadow: '0 8px 24px rgba(0,0,0,0.10)', overflow: 'hidden' }}>
+          <div className="filter-panel" style={{ position: 'absolute', top: 'calc(100% + 6px)', left: 0, zIndex: 100, width: 320, background: white, border: `1px solid ${border}`, borderRadius: 6, boxShadow: '0 8px 24px rgba(0,0,0,0.10)', overflow: 'hidden' }}>
             {showClassifications && (
               <div style={{ padding: '14px 16px', borderBottom: `1px solid ${borderLight}` }}>
                 <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: muted, marginBottom: 10 }}>Classification</div>
