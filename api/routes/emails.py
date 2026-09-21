@@ -21,7 +21,7 @@ _classifier = EmailClassifier()
 
 
 @router.get("", response_model=List[EmailRecord], summary="Get cached inbox emails")
-async def get_emails(
+def get_emails(
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     email_type: Optional[str] = Query(default=None, description="Filter by EmailType"),
@@ -49,7 +49,7 @@ async def get_emails(
 
 
 @router.post("/batch", response_model=List[EmailRecord], summary="Sync and batch-classify Gmail messages")
-async def batch_sync_emails(
+def batch_sync_emails(
     emails: List[EmailRecordCreate],
     user_id: Optional[str] = Depends(get_current_user_id),
     session: Session = Depends(get_session),

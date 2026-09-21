@@ -122,7 +122,7 @@ class EmailClassifier:
             )
         }
 
-        with OpenRouter(api_key=resolved_api_key) as client:
+        with OpenRouter(api_key=resolved_api_key, timeout_ms=10000) as client:
             return client.alpha.decisions.create(
                 model=self.model,
                 state=state,
