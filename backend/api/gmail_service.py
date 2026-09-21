@@ -5,6 +5,7 @@ and background fetching of inbox emails directly from Google.
 """
 import os
 import re
+import asyncio
 import base64
 import logging
 from datetime import datetime, timedelta, timezone
@@ -20,6 +21,45 @@ logger = logging.getLogger(__name__)
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GMAIL_API_BASE = "https://gmail.googleapis.com/gmail/v1/users/me"
 GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v2/userinfo"
+
+# Everyone on the team shares one Gmail account/quota via a single server-side
+# refresh token, so concurrency has to be capped application-wide (not just
+# per-request) - otherwise a couple of people syncing/opening emails at the
+# same time is enough to blow the Gmail API's per-user-per-minute quota.
+_GMAIL_CONCURRENCY = asyncio.Semaphore(5)
+_GMAIL_MAX_RETRIES = 4
+_GMAIL_RETRY_BASE_DELAY = 1.0  # seconds; doubles each retry
+
+
+def _is_rate_limited(resp: httpx.Response) -> bool:
+    """Gmail returns 429 for some rate limits and 403 for others (its 403
+    covers both real permission errors and quota/rate-limit errors), so the
+    body has to be inspected to tell a real permission failure from a
+    transient rate limit worth retrying."""
+    if resp.status_code == 429:
+        return True
+    if resp.status_code == 403:
+        body = resp.text.lower()
+        return "ratelimitexceeded" in body or "quotaexceeded" in body or "rate_limit_exceeded" in body
+    return False
+
+
+async def _gmail_get(client: httpx.AsyncClient, url: str, token: str, params: Optional[Dict[str, Any]] = None) -> httpx.Response:
+    """GET against the Gmail API, capped to _GMAIL_CONCURRENCY concurrent
+    requests app-wide and retried with exponential backoff on rate-limit
+    responses instead of failing the whole sync/fetch on the first 403."""
+    delay = _GMAIL_RETRY_BASE_DELAY
+    resp: Optional[httpx.Response] = None
+    async with _GMAIL_CONCURRENCY:
+        for attempt in range(_GMAIL_MAX_RETRIES + 1):
+            resp = await client.get(url, headers={"Authorization": f"Bearer {token}"}, params=params)
+            if resp.is_success or not _is_rate_limited(resp):
+                return resp
+            if attempt < _GMAIL_MAX_RETRIES:
+                logger.warning(f"Gmail rate limited on {url} (attempt {attempt + 1}/{_GMAIL_MAX_RETRIES + 1}) - retrying in {delay:.1f}s")
+                await asyncio.sleep(delay)
+                delay *= 2
+    return resp
 
 # In-memory token cache fallback if DB is not writable
 _MEM_CACHE: Dict[str, Any] = {
@@ -331,10 +371,7 @@ async def list_message_attachment_names(session: Session, message_id: str) -> Li
     cheap enough to call just to show what's actually attached in the UI."""
     token = await get_valid_access_token(session)
     async with httpx.AsyncClient(timeout=15.0) as client:
-        msg_resp = await client.get(
-            f"{GMAIL_API_BASE}/messages/{message_id}?format=full",
-            headers={"Authorization": f"Bearer {token}"},
-        )
+        msg_resp = await _gmail_get(client, f"{GMAIL_API_BASE}/messages/{message_id}?format=full", token)
         if not msg_resp.is_success:
             raise RuntimeError(f"Failed to fetch message {message_id} ({msg_resp.status_code}): {msg_resp.text}")
         payload = msg_resp.json().get("payload", {})
@@ -351,10 +388,7 @@ async def fetch_message_attachments(session: Session, message_id: str) -> List[T
     token = await get_valid_access_token(session)
 
     async with httpx.AsyncClient(timeout=25.0) as client:
-        msg_resp = await client.get(
-            f"{GMAIL_API_BASE}/messages/{message_id}?format=full",
-            headers={"Authorization": f"Bearer {token}"},
-        )
+        msg_resp = await _gmail_get(client, f"{GMAIL_API_BASE}/messages/{message_id}?format=full", token)
         if not msg_resp.is_success:
             raise RuntimeError(f"Failed to fetch message {message_id} ({msg_resp.status_code}): {msg_resp.text}")
 
@@ -364,16 +398,12 @@ async def fetch_message_attachments(session: Session, message_id: str) -> List[T
             return []
 
         async def fetch_one(filename: str, attachment_id: str) -> Tuple[str, bytes]:
-            r = await client.get(
-                f"{GMAIL_API_BASE}/messages/{message_id}/attachments/{attachment_id}",
-                headers={"Authorization": f"Bearer {token}"},
-            )
+            r = await _gmail_get(client, f"{GMAIL_API_BASE}/messages/{message_id}/attachments/{attachment_id}", token)
             if not r.is_success:
                 raise RuntimeError(f"Failed to fetch attachment {filename} ({r.status_code}): {r.text}")
             data_str = r.json().get("data", "")
             return filename, decode_base64_url_bytes(data_str)
 
-        import asyncio
         results = await asyncio.gather(*[fetch_one(f, aid) for f, aid in refs])
         return list(results)
 
@@ -411,11 +441,7 @@ async def fetch_gmail_inbox_messages(
 
     async with httpx.AsyncClient(timeout=25.0) as client:
         # 1. Fetch message ID list
-        list_resp = await client.get(
-            f"{GMAIL_API_BASE}/messages",
-            headers={"Authorization": f"Bearer {token}"},
-            params=query_params,
-        )
+        list_resp = await _gmail_get(client, f"{GMAIL_API_BASE}/messages", token, params=query_params)
         if not list_resp.is_success:
             err = list_resp.text
             raise RuntimeError(f"Gmail messages list failed ({list_resp.status_code}): {err}")
@@ -429,16 +455,14 @@ async def fetch_gmail_inbox_messages(
 
         message_ids = [m["id"] for m in messages_meta]
 
-        # 2. Concurrently fetch full message payloads
-        sem = httpx.Limits(max_keepalive_connections=10, max_connections=15)
+        # 2. Fetch full message payloads - concurrency and rate-limit
+        # retry/backoff both happen inside _gmail_get (shared app-wide, since
+        # everyone funnels through the same Gmail account/quota).
         parsed_results: List[dict] = []
 
         async def fetch_one(msg_id: str) -> Optional[dict]:
             try:
-                r = await client.get(
-                    f"{GMAIL_API_BASE}/messages/{msg_id}?format=full",
-                    headers={"Authorization": f"Bearer {token}"},
-                )
+                r = await _gmail_get(client, f"{GMAIL_API_BASE}/messages/{msg_id}?format=full", token)
                 if not r.is_success:
                     logger.warning(f"Failed to fetch message {msg_id}: {r.status_code}")
                     return None
@@ -447,7 +471,6 @@ async def fetch_gmail_inbox_messages(
                 logger.warning(f"Error fetching message {msg_id}: {ex}")
                 return None
 
-        import asyncio
         tasks = [fetch_one(mid) for mid in message_ids]
         raw_messages = await asyncio.gather(*tasks)
 
