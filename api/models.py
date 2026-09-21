@@ -4,6 +4,7 @@ SQLModel database models for ShipCheck SQLite persistence.
 from datetime import datetime, timezone
 from typing import Optional
 from sqlmodel import SQLModel, Field
+from sqlalchemy import Column, BigInteger
 
 
 def utc_now() -> datetime:
@@ -20,7 +21,7 @@ class EmailRecord(SQLModel, table=True):
     subject: str
     snippet: str
     date_str: str
-    timestamp: int
+    timestamp: int = Field(sa_column=Column(BigInteger, nullable=False))
     email_type: str                                  # 'Document Comparison', 'New SI Request', 'Invoice Query', 'General', 'Spam'
     status: str                                      # 'Match', 'Mismatch', 'Needs Review', 'Classified', 'Processing', 'New'
     confidence: float = 1.0

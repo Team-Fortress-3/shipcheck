@@ -17,7 +17,7 @@ if str(repo_root) not in sys.path:
 load_dotenv()
 
 from api.db import init_db
-from api.routes import classify, compare, health, emails, comparisons
+from api.routes import classify, compare, health, emails, comparisons, auth
 
 
 @asynccontextmanager
@@ -52,6 +52,7 @@ app.include_router(compare.router, prefix="/api")
 app.include_router(emails.router, prefix="/api")
 app.include_router(comparisons.router, prefix="/api")
 app.include_router(health.router, prefix="/api")
+app.include_router(auth.router)
 
 # Also alias without /api prefix for convenience
 app.include_router(classify.router)

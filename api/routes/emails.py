@@ -61,11 +61,9 @@ async def batch_sync_emails(
     if not emails:
         return []
 
-    # 1. Fetch all existing records for this user in one query
+    # 1. Fetch all existing records by ID in one query
     email_ids = [e.id for e in emails]
     stmt = select(EmailRecord).where(EmailRecord.id.in_(email_ids))
-    if user_id:
-        stmt = stmt.where(EmailRecord.user_id == user_id)
     existing_records = {rec.id: rec for rec in session.exec(stmt).all()}
 
     results: List[EmailRecord] = []
@@ -76,7 +74,7 @@ async def batch_sync_emails(
 
         if item.id in existing_records:
             rec = existing_records[item.id]
-            if rec.status and rec.status != "Processing":
+            if rec.user_id == effective_user_id and rec.status and rec.status != "Processing":
                 results.append(rec)
                 continue
 
