@@ -44,18 +44,23 @@ def _is_rate_limited(resp: httpx.Response) -> bool:
     return False
 
 
-async def _gmail_get(client: httpx.AsyncClient, url: str, token: str, params: Optional[Dict[str, Any]] = None) -> httpx.Response:
+async def _gmail_get(client: httpx.AsyncClient, session: Session, user_id: str, url: str, params: Optional[Dict[str, Any]] = None) -> httpx.Response:
     """GET against the Gmail API, capped to _GMAIL_CONCURRENCY concurrent
-    requests app-wide and retried with exponential backoff on both rate-limit
+    requests app-wide and retried with exponential backoff on rate-limit
     responses and transient transport failures (dropped/reset connections,
     read timeouts - "Server disconnected without sending a response" is
-    httpx.RemoteProtocolError, a TransportError subclass) instead of failing
-    the whole sync/fetch on the first hiccup."""
+    httpx.RemoteProtocolError, a TransportError subclass). Also handles a
+    real 401 from Gmail by forcing a fresh token refresh and retrying - our
+    own cached expires_at is only an estimate, and Gmail can reject a token
+    we still believe is valid."""
     delay = _GMAIL_RETRY_BASE_DELAY
     resp: Optional[httpx.Response] = None
     last_error: Optional[Exception] = None
+    force_refresh = False
     async with _GMAIL_CONCURRENCY:
         for attempt in range(_GMAIL_MAX_RETRIES + 1):
+            token = await get_valid_access_token(session, user_id, force_refresh=force_refresh)
+            force_refresh = False
             try:
                 resp = await client.get(url, headers={"Authorization": f"Bearer {token}"}, params=params)
             except httpx.TransportError as ex:
@@ -66,7 +71,15 @@ async def _gmail_get(client: httpx.AsyncClient, url: str, token: str, params: Op
                     delay *= 2
                     continue
                 raise
-            if resp.is_success or not _is_rate_limited(resp):
+            if resp.is_success:
+                return resp
+            if resp.status_code == 401:
+                if attempt < _GMAIL_MAX_RETRIES:
+                    logger.warning(f"Gmail returned 401 on {url} despite a cached token that looked valid - forcing a real refresh and retrying (attempt {attempt + 1}/{_GMAIL_MAX_RETRIES + 1})")
+                    force_refresh = True
+                    continue
+                return resp
+            if not _is_rate_limited(resp):
                 return resp
             if attempt < _GMAIL_MAX_RETRIES:
                 logger.warning(f"Gmail rate limited on {url} (attempt {attempt + 1}/{_GMAIL_MAX_RETRIES + 1}) - retrying in {delay:.1f}s")
@@ -233,27 +246,34 @@ async def exchange_auth_code_for_tokens(
     return record
 
 
-async def get_valid_access_token(session: Session, user_id: str) -> str:
+async def get_valid_access_token(session: Session, user_id: str, force_refresh: bool = False) -> str:
     """
     Returns a valid Google OAuth access token for this specific user.
     Uses cached token if still unexpired; otherwise renews via refresh token.
+
+    force_refresh skips the cache entirely and always renews - our own
+    expiry bookkeeping is only ever an estimate (Google can invalidate an
+    access token before our stored expires_at says it should), so callers
+    that get a real 401 back from Gmail despite a "still valid" cached
+    token pass this to get a token we haven't already tried.
     """
     now = utc_now()
-
-    # 1. Check DB record cache
     record = get_integration_record(session, user_id)
-    if record and record.access_token and record.access_token_expires_at:
-        exp = to_utc(record.access_token_expires_at)
-        # Check with 2-minute buffer
-        if exp and exp > now + timedelta(minutes=2):
-            return record.access_token
 
-    # 2. Check memory cache fallback
-    mem = _MEM_CACHE.get(user_id)
-    if mem and mem.get("access_token") and mem.get("expires_at"):
-        exp = to_utc(mem["expires_at"])
-        if exp and exp > now + timedelta(minutes=2):
-            return mem["access_token"]
+    if not force_refresh:
+        # 1. Check DB record cache
+        if record and record.access_token and record.access_token_expires_at:
+            exp = to_utc(record.access_token_expires_at)
+            # Check with 2-minute buffer
+            if exp and exp > now + timedelta(minutes=2):
+                return record.access_token
+
+        # 2. Check memory cache fallback
+        mem = _MEM_CACHE.get(user_id)
+        if mem and mem.get("access_token") and mem.get("expires_at"):
+            exp = to_utc(mem["expires_at"])
+            if exp and exp > now + timedelta(minutes=2):
+                return mem["access_token"]
 
     # 3. Retrieve refresh token
     refresh_token = get_refresh_token(session, user_id)
@@ -399,9 +419,8 @@ def extract_attachment_refs(payload: dict) -> List[Tuple[str, str]]:
 async def list_message_attachment_names(session: Session, user_id: str, message_id: str) -> List[str]:
     """Lists a message's attachment filenames without downloading their bytes -
     cheap enough to call just to show what's actually attached in the UI."""
-    token = await get_valid_access_token(session, user_id)
     async with httpx.AsyncClient(timeout=15.0) as client:
-        msg_resp = await _gmail_get(client, f"{GMAIL_API_BASE}/messages/{message_id}?format=full", token)
+        msg_resp = await _gmail_get(client, session, user_id, f"{GMAIL_API_BASE}/messages/{message_id}?format=full")
         if not msg_resp.is_success:
             raise RuntimeError(f"Failed to fetch message {message_id} ({msg_resp.status_code}): {msg_resp.text}")
         payload = msg_resp.json().get("payload", {})
@@ -414,10 +433,8 @@ async def fetch_message_attachments(session: Session, user_id: str, message_id: 
     authorized Gmail connection.
     Returns [(filename, raw_bytes), ...].
     """
-    token = await get_valid_access_token(session, user_id)
-
     async with httpx.AsyncClient(timeout=25.0) as client:
-        msg_resp = await _gmail_get(client, f"{GMAIL_API_BASE}/messages/{message_id}?format=full", token)
+        msg_resp = await _gmail_get(client, session, user_id, f"{GMAIL_API_BASE}/messages/{message_id}?format=full")
         if not msg_resp.is_success:
             raise RuntimeError(f"Failed to fetch message {message_id} ({msg_resp.status_code}): {msg_resp.text}")
 
@@ -427,7 +444,7 @@ async def fetch_message_attachments(session: Session, user_id: str, message_id: 
             return []
 
         async def fetch_one(filename: str, attachment_id: str) -> Tuple[str, bytes]:
-            r = await _gmail_get(client, f"{GMAIL_API_BASE}/messages/{message_id}/attachments/{attachment_id}", token)
+            r = await _gmail_get(client, session, user_id, f"{GMAIL_API_BASE}/messages/{message_id}/attachments/{attachment_id}")
             if not r.is_success:
                 raise RuntimeError(f"Failed to fetch attachment {filename} ({r.status_code}): {r.text}")
             data_str = r.json().get("data", "")
@@ -460,8 +477,6 @@ async def fetch_gmail_inbox_messages(
     Fetches a page of inbox messages using this user's own authorized Gmail
     connection. Returns (parsed_email_dicts, next_page_token).
     """
-    token = await get_valid_access_token(session, user_id)
-
     query_params: Dict[str, Any] = {
         "maxResults": max_results,
         "q": "in:inbox",
@@ -471,7 +486,7 @@ async def fetch_gmail_inbox_messages(
 
     async with httpx.AsyncClient(timeout=25.0) as client:
         # 1. Fetch message ID list
-        list_resp = await _gmail_get(client, f"{GMAIL_API_BASE}/messages", token, params=query_params)
+        list_resp = await _gmail_get(client, session, user_id, f"{GMAIL_API_BASE}/messages", params=query_params)
         if not list_resp.is_success:
             err = list_resp.text
             raise RuntimeError(f"Gmail messages list failed ({list_resp.status_code}): {err}")
@@ -492,7 +507,7 @@ async def fetch_gmail_inbox_messages(
 
         async def fetch_one(msg_id: str) -> Optional[dict]:
             try:
-                r = await _gmail_get(client, f"{GMAIL_API_BASE}/messages/{msg_id}?format=full", token)
+                r = await _gmail_get(client, session, user_id, f"{GMAIL_API_BASE}/messages/{msg_id}?format=full")
                 if not r.is_success:
                     logger.warning(f"Failed to fetch message {msg_id}: {r.status_code}")
                     return None
