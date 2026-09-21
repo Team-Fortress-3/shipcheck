@@ -13,6 +13,7 @@ def utc_now() -> datetime:
 class EmailRecord(SQLModel, table=True):
     """Stores classified emails fetched from Gmail."""
     id: str = Field(primary_key=True)               # Gmail message ID (immutable)
+    user_id: Optional[str] = Field(default=None, index=True) # Supabase User UUID
     thread_id: str
     from_name: str
     from_email: str
@@ -33,6 +34,7 @@ class EmailRecord(SQLModel, table=True):
 class ComparisonRecord(SQLModel, table=True):
     """Stores SI vs draft BL comparison reports and history."""
     id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: Optional[str] = Field(default=None, index=True) # Supabase User UUID
     email_id: Optional[str] = Field(default=None, index=True)
     si_name: str
     bl_name: str

@@ -68,11 +68,13 @@ class EmailRecordCreate(BaseModel):
     body_snippet: Optional[str] = None
     email_type: Optional[EmailType] = None
     status: Optional[EmailStatus] = None
+    user_id: Optional[str] = None
 
 
 class ComparisonRecordRead(BaseModel):
     """Read model for saved comparison history."""
     id: int
+    user_id: Optional[str] = None
     email_id: Optional[str] = None
     si_name: str
     bl_name: str

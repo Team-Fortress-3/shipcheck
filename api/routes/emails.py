@@ -11,6 +11,7 @@ from api.models import EmailRecord, utc_now
 from api.schemas import EmailRecordCreate
 from api.routes.classify import classify_text_heuristic
 from api.adapter import build_classify_response, map_category_to_email_type
+from api.auth import get_current_user_id
 from core.classifier import EmailClassifier
 
 logger = logging.getLogger(__name__)
@@ -25,6 +26,7 @@ async def get_emails(
     offset: int = Query(default=0, ge=0),
     email_type: Optional[str] = Query(default=None, description="Filter by EmailType"),
     status: Optional[str] = Query(default=None, description="Filter by EmailStatus"),
+    user_id: Optional[str] = Depends(get_current_user_id),
     session: Session = Depends(get_session),
 ) -> List[EmailRecord]:
     """
@@ -32,6 +34,8 @@ async def get_emails(
     Allows the frontend to load inbox instantly (<10ms) without hitting Gmail or LLMs.
     """
     stmt = select(EmailRecord)
+    if user_id:
+        stmt = stmt.where(EmailRecord.user_id == user_id)
     if email_type:
         stmt = stmt.where(EmailRecord.email_type == email_type)
     if status:
@@ -44,29 +48,32 @@ async def get_emails(
 @router.post("/batch", response_model=List[EmailRecord], summary="Sync and batch-classify Gmail messages")
 async def batch_sync_emails(
     emails: List[EmailRecordCreate],
+    user_id: Optional[str] = Depends(get_current_user_id),
     session: Session = Depends(get_session),
 ) -> List[EmailRecord]:
     """
     Intelligent cache layer:
     For each incoming Gmail message:
-      - If already present in SQLite, returns cached record (0 LLM cost).
-      - If new, classifies via EmailClassifier (or heuristic fallback) and saves to SQLite.
+      - If already present in SQLite/Postgres for this user, returns cached record (0 LLM cost).
+      - If new, classifies via EmailClassifier (or heuristic fallback) and saves to database.
     Returns the complete list of emails in original order.
     """
     if not emails:
         return []
 
-    # 1. Fetch all existing records in one query
+    # 1. Fetch all existing records for this user in one query
     email_ids = [e.id for e in emails]
-    existing_records = {
-        rec.id: rec
-        for rec in session.exec(select(EmailRecord).where(EmailRecord.id.in_(email_ids))).all()
-    }
+    stmt = select(EmailRecord).where(EmailRecord.id.in_(email_ids))
+    if user_id:
+        stmt = stmt.where(EmailRecord.user_id == user_id)
+    existing_records = {rec.id: rec for rec in session.exec(stmt).all()}
 
     results: List[EmailRecord] = []
     to_add: List[EmailRecord] = []
 
     for item in emails:
+        effective_user_id = item.user_id or user_id
+
         if item.id in existing_records:
             rec = existing_records[item.id]
             if rec.status and rec.status != "Processing":
@@ -99,6 +106,7 @@ async def batch_sync_emails(
 
         if item.id in existing_records:
             rec = existing_records[item.id]
+            rec.user_id = effective_user_id or rec.user_id
             rec.email_type = email_type
             rec.status = status
             rec.confidence = classify_resp.confidence
@@ -110,6 +118,7 @@ async def batch_sync_emails(
         else:
             new_record = EmailRecord(
                 id=item.id,
+                user_id=effective_user_id,
                 thread_id=item.thread_id,
                 from_name=item.from_name,
                 from_email=item.from_email,

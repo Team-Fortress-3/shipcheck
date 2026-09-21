@@ -9,6 +9,7 @@ from sqlmodel import Session, select
 from api.db import get_session
 from api.models import ComparisonRecord
 from api.schemas import ComparisonRecordRead, ComparisonField, ComparisonReviewUpdate
+from api.auth import get_current_user_id
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,7 @@ def _to_read_model(rec: ComparisonRecord) -> ComparisonRecordRead:
 
     return ComparisonRecordRead(
         id=rec.id,
+        user_id=rec.user_id,
         email_id=rec.email_id,
         si_name=rec.si_name,
         bl_name=rec.bl_name,
@@ -45,12 +47,15 @@ async def list_comparisons(
     email_id: Optional[str] = Query(default=None, description="Filter by linked email ID"),
     status: Optional[str] = Query(default=None, description="Filter by comparison status"),
     reviewed: Optional[bool] = Query(default=None, description="Filter by review status"),
+    user_id: Optional[str] = Depends(get_current_user_id),
     session: Session = Depends(get_session),
 ) -> List[ComparisonRecordRead]:
     """
     Returns historical SI vs BL comparison reports for the History / Reports page and human review queue.
     """
     stmt = select(ComparisonRecord)
+    if user_id:
+        stmt = stmt.where(ComparisonRecord.user_id == user_id)
     if email_id:
         stmt = stmt.where(ComparisonRecord.email_id == email_id)
     if status:

@@ -17,6 +17,8 @@ from core.compare_ai import DocumentComparator
 from core.extract import extract_fields, FIELDS
 from core.readers.reader import UnreadableAttachment
 
+from api.auth import get_current_user_id
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["Document Comparison"])
@@ -30,12 +32,14 @@ def _save_comparison_record(
     bl_name: str,
     response: CompareResponse,
     email_id: Optional[str] = None,
+    user_id: Optional[str] = None,
 ) -> int:
     """Helper to persist ComparisonRecord and update linked EmailRecord if present."""
     fields_data = [f.model_dump() for f in response.fields]
     fields_json = json.dumps(fields_data)
 
     rec = ComparisonRecord(
+        user_id=user_id,
         email_id=email_id,
         si_name=si_name,
         bl_name=bl_name,
@@ -64,6 +68,7 @@ async def compare_documents_files(
     si_file: UploadFile = File(..., description="Shipping Instruction document (PDF, TXT, DOCX, XLSX)"),
     bl_file: UploadFile = File(..., description="Draft Bill of Lading document (PDF, TXT, DOCX, XLSX)"),
     email_id: Optional[str] = Form(default=None, description="Optional Gmail ID to link this comparison"),
+    user_id: Optional[str] = Depends(get_current_user_id),
     session: Session = Depends(get_session),
 ) -> CompareResponse:
     """
@@ -93,12 +98,12 @@ async def compare_documents_files(
                 comparison=_comparator.compare({}, {}, FIELDS),
                 review_reason=f"Unreadable attachment: {str(e)}",
             )
-            res.comparison_id = _save_comparison_record(session, si_name, bl_name, res, email_id)
+            res.comparison_id = _save_comparison_record(session, si_name, bl_name, res, email_id, user_id)
             return res
 
         comparison = _comparator.compare(si_fields, bl_fields, FIELDS)
         res = build_compare_response(si_fields, bl_fields, comparison)
-        res.comparison_id = _save_comparison_record(session, si_name, bl_name, res, email_id)
+        res.comparison_id = _save_comparison_record(session, si_name, bl_name, res, email_id, user_id)
         return res
 
     except HTTPException:
@@ -120,6 +125,7 @@ async def compare_documents_files(
 @router.post("/compare/text", response_model=CompareResponse, summary="Compare raw document texts")
 async def compare_documents_text(
     payload: CompareTextRequest,
+    user_id: Optional[str] = Depends(get_current_user_id),
     session: Session = Depends(get_session),
 ) -> CompareResponse:
     """
@@ -133,7 +139,7 @@ async def compare_documents_text(
         comparison = _comparator.compare(si_fields, bl_fields, FIELDS)
         res = build_compare_response(si_fields, bl_fields, comparison)
         res.comparison_id = _save_comparison_record(
-            session, "raw_si_text", "raw_bl_text", res, payload.email_id
+            session, "raw_si_text", "raw_bl_text", res, payload.email_id, user_id
         )
         return res
     except Exception as e:
