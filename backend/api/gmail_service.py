@@ -46,19 +46,34 @@ def _is_rate_limited(resp: httpx.Response) -> bool:
 
 async def _gmail_get(client: httpx.AsyncClient, url: str, token: str, params: Optional[Dict[str, Any]] = None) -> httpx.Response:
     """GET against the Gmail API, capped to _GMAIL_CONCURRENCY concurrent
-    requests app-wide and retried with exponential backoff on rate-limit
-    responses instead of failing the whole sync/fetch on the first 403."""
+    requests app-wide and retried with exponential backoff on both rate-limit
+    responses and transient transport failures (dropped/reset connections,
+    read timeouts - "Server disconnected without sending a response" is
+    httpx.RemoteProtocolError, a TransportError subclass) instead of failing
+    the whole sync/fetch on the first hiccup."""
     delay = _GMAIL_RETRY_BASE_DELAY
     resp: Optional[httpx.Response] = None
+    last_error: Optional[Exception] = None
     async with _GMAIL_CONCURRENCY:
         for attempt in range(_GMAIL_MAX_RETRIES + 1):
-            resp = await client.get(url, headers={"Authorization": f"Bearer {token}"}, params=params)
+            try:
+                resp = await client.get(url, headers={"Authorization": f"Bearer {token}"}, params=params)
+            except httpx.TransportError as ex:
+                last_error = ex
+                if attempt < _GMAIL_MAX_RETRIES:
+                    logger.warning(f"Gmail transport error on {url} (attempt {attempt + 1}/{_GMAIL_MAX_RETRIES + 1}): {ex} - retrying in {delay:.1f}s")
+                    await asyncio.sleep(delay)
+                    delay *= 2
+                    continue
+                raise
             if resp.is_success or not _is_rate_limited(resp):
                 return resp
             if attempt < _GMAIL_MAX_RETRIES:
                 logger.warning(f"Gmail rate limited on {url} (attempt {attempt + 1}/{_GMAIL_MAX_RETRIES + 1}) - retrying in {delay:.1f}s")
                 await asyncio.sleep(delay)
                 delay *= 2
+    if resp is None and last_error:
+        raise last_error
     return resp
 
 # In-memory token cache fallback if DB is not writable, keyed by user_id so
