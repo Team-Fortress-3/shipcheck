@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import type { GmailEmail } from '../types'
 import {
   surface,
@@ -12,6 +13,7 @@ import {
   amberBdr,
 } from '../constants/tokens'
 import { SectionLabel, Badge, Spinner } from '../components/primitives'
+import { getEmailAttachmentsApi, getAttachmentDownloadUrl } from '../services/api'
 
 interface EmailDetailPageProps {
   email: GmailEmail
@@ -27,6 +29,22 @@ export function EmailDetailPage({ email, onBack, onProcess, isComparing, gmailCo
   const isDoc = email.type === 'Document Comparison'
   const isPending = email.status === 'New' || email.status === 'Processing'
   const needsGmail = isPending && !gmailConnected
+
+  const [attachmentNames, setAttachmentNames] = useState<string[] | null>(null)
+  const [attachmentsLoading, setAttachmentsLoading] = useState(false)
+
+  useEffect(() => {
+    setAttachmentNames(null)
+    if (!email.hasAttachments) return
+    setAttachmentsLoading(true)
+    getEmailAttachmentsApi(email.id)
+      .then(setAttachmentNames)
+      .catch(err => {
+        console.warn(`Failed to list attachments for ${email.id}:`, err)
+        setAttachmentNames(null)
+      })
+      .finally(() => setAttachmentsLoading(false))
+  }, [email.id, email.hasAttachments])
   return (
     <div style={{ padding: 28 }}>
       <button onClick={onBack} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color: navy, border: `1px solid ${border}`, background: white, cursor: 'pointer', padding: '7px 14px', borderRadius: 4, marginBottom: 24 }}>← Back to Inbox</button>
@@ -53,13 +71,32 @@ export function EmailDetailPage({ email, onBack, onProcess, isComparing, gmailCo
       {email.hasAttachments && (
         <div style={{ border: `1px solid ${border}`, borderRadius: 4, background: white, padding: '20px 24px', marginBottom: 16 }}>
           <SectionLabel>Attachments</SectionLabel>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', border: `1px solid ${borderLight}`, borderRadius: 4, background: surface }}>
-            <span style={{ fontSize: 16 }}>📎</span>
-            <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 12, fontWeight: 600, color: ink }}>Attachments detected on message</div>
-              <div style={{ fontSize: 11, color: muted }}>Shipping documents are attached to this message thread.</div>
+          {attachmentsLoading ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', border: `1px solid ${borderLight}`, borderRadius: 4, background: surface }}>
+              <Spinner size={14} color={navy} />
+              <span style={{ fontSize: 12, color: muted }}>Checking attachments…</span>
             </div>
-          </div>
+          ) : attachmentNames && attachmentNames.length > 0 ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {attachmentNames.map(name => (
+                <div key={name} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', border: `1px solid ${borderLight}`, borderRadius: 4, background: surface }}>
+                  <span style={{ flex: 1, fontSize: 12, fontWeight: 600, color: ink, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
+                  <a
+                    href={getAttachmentDownloadUrl(email.id, name)}
+                    download={name}
+                    style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', padding: '5px 10px', border: `1px solid ${border}`, borderRadius: 3, background: white, color: navy, textDecoration: 'none', whiteSpace: 'nowrap' }}
+                  >
+                    Download
+                  </a>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div style={{ padding: '10px 14px', border: `1px solid ${borderLight}`, borderRadius: 4, background: surface }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: ink }}>Attachments detected on message</div>
+              <div style={{ fontSize: 11, color: muted }}>Couldn't list filenames right now - shipping documents are attached to this message thread.</div>
+            </div>
+          )}
         </div>
       )}
 

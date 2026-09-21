@@ -113,12 +113,11 @@ export function LoginPage({ onGoogleLogin, onSupabaseLogin }: LoginPageProps) {
     <div style={{ minHeight: '100vh', background: bg, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
       {/* Brand Header */}
       <div style={{ marginBottom: 28, textAlign: 'center' }}>
-        <div style={{ fontSize: 9, letterSpacing: '0.2em', textTransform: 'uppercase', color: faint, marginBottom: 14 }}>— Est. 2026</div>
         <div style={{ fontFamily: 'Playfair Display, serif', fontSize: 36, fontWeight: 700, color: ink, lineHeight: 1 }}>
           Ship<em style={{ color: navy }}>Check</em>
         </div>
         <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.14em', textTransform: 'uppercase', color: faint, marginTop: 6 }}>
-          by Averis · Shipping Operations Platform
+          Shipping Operations Platform
         </div>
       </div>
 

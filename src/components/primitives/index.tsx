@@ -11,7 +11,12 @@ import {
   red,
   redBg,
   redBdr,
+  white,
+  border,
+  ink,
+  faint,
 } from '../../constants/tokens'
+import { emailTypeLabel } from '../../types'
 
 // ─── SectionLabel ─────────────────────────────────────────────────────────────
 
@@ -83,15 +88,16 @@ export function Badge({ label }: { label: string }) {
     'Classified':          { bg: '#F3F4F6', color: '#4B5563', border: '#E5E7EB' },
     'New':                 { bg: '#EFF6FF', color: '#1D4ED8', border: '#BFDBFE' },
     'Processing':          { bg: '#EFF6FF', color: '#1D4ED8', border: '#BFDBFE' },
+    'Comparing':           { bg: '#EFF6FF', color: '#1D4ED8', border: '#BFDBFE' },
   }
   const s = map[label] || map['Classified']
   const dot = label === 'Mismatch' || label === 'Needs Review' || label === 'Match'
-  const isProcessing = label === 'Processing'
+  const isProcessing = label === 'Processing' || label === 'Comparing'
   return (
     <span className="inline-flex items-center gap-1" style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase', padding: '3px 8px', border: `1px solid ${s.border}`, borderRadius: 3, background: s.bg, color: s.color }}>
       {dot && <span style={{ width: 5, height: 5, borderRadius: '50%', background: label === 'Match' ? green : label === 'Needs Review' ? red : '#D97706', display: 'inline-block' }} />}
       {isProcessing && <Spinner size={9} color="#1D4ED8" />}
-      {label}
+      {emailTypeLabel(label)}
     </span>
   )
 }
@@ -113,6 +119,29 @@ export function SearchIcon() {
       <circle cx="6.5" cy="6.5" r="4.5" stroke="currentColor" strokeWidth="1.4"/>
       <path d="M10 10l4 4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
     </svg>
+  )
+}
+
+// ─── SearchInput ──────────────────────────────────────────────────────────────
+
+export function SearchInput({ value, onChange, placeholder, maxWidth = 360 }: {
+  value: string
+  onChange: (v: string) => void
+  placeholder?: string
+  maxWidth?: number
+}) {
+  return (
+    <div style={{ position: 'relative', flex: 1, maxWidth }}>
+      <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: faint }}>
+        <SearchIcon />
+      </span>
+      <input
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        placeholder={placeholder || 'Search…'}
+        style={{ width: '100%', paddingLeft: 32, paddingRight: 12, paddingTop: 8, paddingBottom: 8, fontSize: 13, border: `1px solid ${border}`, borderRadius: 4, background: white, color: ink, outline: 'none', boxSizing: 'border-box' }}
+      />
+    </div>
   )
 }
 

@@ -53,3 +53,12 @@ export interface ClassifyingState {
 
 export type { EmailType, EmailStatus, ComparisonField, ComparisonRecord }
 
+// The stored/compared value is still 'Document Comparison' (DB column,
+// backend category map, every `type === 'Document Comparison'` check) -
+// only what's actually shown to the user changes. Renaming the underlying
+// value would desync every already-synced email's stored type until
+// reclassified, so this is display-only.
+export function emailTypeLabel(type: string): string {
+  return type === 'Document Comparison' ? 'BL Comparison' : type
+}
+

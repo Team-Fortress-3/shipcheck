@@ -34,7 +34,7 @@ export function ComparisonReport({ fields, siName, blName, subject, summary }: C
     <>
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 20, gap: 16 }}>
         <div>
-          <h2 style={{ fontFamily: 'Playfair Display, serif', fontSize: 26, fontWeight: 700, color: ink, margin: '0 0 6px' }}>{subject || 'Document Comparison'}</h2>
+          <h2 style={{ fontFamily: 'Playfair Display, serif', fontSize: 26, fontWeight: 700, color: ink, margin: '0 0 6px' }}>{subject || 'BL Comparison'}</h2>
           <p style={{ fontSize: 12, color: muted, margin: 0 }}>{siName || 'Shipping_Instruction.pdf'} · {blName || 'Draft_Bill_of_Lading.pdf'}</p>
           {summary && <p style={{ fontSize: 12, color: muted, marginTop: 6, lineHeight: 1.5 }}>{summary}</p>}
         </div>

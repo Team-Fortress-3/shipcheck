@@ -63,6 +63,30 @@ body {
   }
 }
 
+/* Indeterminate progress bar - for operations with no real % (e.g. a single
+   atomic server-side sync call with no per-item progress to report). */
+@keyframes indeterminate-bar {
+  0% { left: -40%; }
+  100% { left: 100%; }
+}
+
+.indeterminate-bar {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  width: 40%;
+  border-radius: 2px;
+  animation: indeterminate-bar 1.1s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .indeterminate-bar {
+    animation: none;
+    left: 0;
+    width: 100%;
+  }
+}
+
 
 /* App shell / scrolling
  * The browser is the single vertical scroll container. The sidebar and top bar

@@ -15,9 +15,11 @@ export function TopBar({
   loading,
   classifying,
 }: TopBarProps) {
+  // Fixed to Malaysia time (GMT+8) regardless of the viewer's own machine,
+  // same as every other displayed date/time in the app.
   const now = new Date()
-  const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-  const dateStr = now.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' }).toUpperCase()
+  const timeStr = now.toLocaleTimeString([], { timeZone: 'Asia/Kuala_Lumpur', hour: '2-digit', minute: '2-digit', second: '2-digit' })
+  const dateStr = now.toLocaleDateString([], { timeZone: 'Asia/Kuala_Lumpur', weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' }).toUpperCase()
   const [, setTick] = useState(0)
   useEffect(() => { const t = setInterval(() => setTick(n => n + 1), 1000); return () => clearInterval(t) }, [])
 

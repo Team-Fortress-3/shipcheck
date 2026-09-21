@@ -1,6 +1,6 @@
 import type { Page, GmailEmail, UserInfo } from '../../types'
 import { navy, ink } from '../../constants/tokens'
-import { SettingsIcon, LogoutIcon } from '../primitives'
+import { LogoutIcon } from '../primitives'
 
 interface SidebarProps {
   page: Page
@@ -8,11 +8,15 @@ interface SidebarProps {
   user: UserInfo | null
   emails: GmailEmail[]
   onLogout: () => void
+  accent?: 'success' | 'error' | null
 }
 
-export function Sidebar({ page, onNav, user, emails, onLogout }: SidebarProps) {
+const ACCENT_COLOR = { success: '#22C55E', error: '#EF4444' } as const
+
+export function Sidebar({ page, onNav, user, emails, onLogout, accent }: SidebarProps) {
   const unread = emails.filter(e => e.status === 'New').length
   const reviewCount = emails.filter(e => e.status === 'Needs Review').length
+  const accentColor = accent ? ACCENT_COLOR[accent] : 'transparent'
 
   const nav: { id: Page; label: string; count?: number }[] = [
     { id: 'dashboard', label: 'Dashboard' },
@@ -24,21 +28,23 @@ export function Sidebar({ page, onNav, user, emails, onLogout }: SidebarProps) {
   ]
 
   return (
-    <aside className="app-sidebar" style={{ background: navy }}>
+    <aside
+      className="app-sidebar"
+      style={{
+        background: navy,
+        borderRight: `3px solid ${accentColor}`,
+        boxShadow: accent ? `inset -8px 0 16px -12px ${accentColor}` : 'none',
+        transition: 'border-color 0.3s ease, box-shadow 0.3s ease',
+      }}
+    >
       {/* Logo */}
       <div style={{ padding: '28px 20px 20px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 2 }}>
-          <div style={{ width: 30, height: 30, borderRadius: 6, background: 'rgba(255,255,255,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-            <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
-              <path d="M2 3.5h12M2 7.5h8M2 11.5h10" stroke="white" strokeWidth="1.5" strokeLinecap="round"/>
-              <circle cx="14" cy="11" r="2" fill="#F59E0B"/>
-            </svg>
-          </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <img src="/logo.png" alt="" style={{ height: 32, width: 'auto', flexShrink: 0 }} />
           <div>
             <div style={{ fontFamily: 'Playfair Display, serif', color: 'white', fontSize: 16, fontWeight: 700, lineHeight: 1 }}>ShipCheck</div>
           </div>
         </div>
-        <div style={{ fontSize: 9, letterSpacing: '0.16em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.3)', paddingLeft: 40, marginTop: 4 }}>by Averis · Est. 2026</div>
       </div>
 
       <div style={{ height: 1, background: 'rgba(255,255,255,0.08)', margin: '0 20px' }} />
@@ -84,21 +90,13 @@ export function Sidebar({ page, onNav, user, emails, onLogout }: SidebarProps) {
             </div>
           </div>
         )}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-          <button
-            onClick={() => onNav('settings')}
-            style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'none', border: 'none', cursor: 'pointer', color: page === 'settings' ? '#F59E0B' : 'rgba(255,255,255,0.45)', fontSize: 11, padding: 0 }}
-          >
-            <SettingsIcon /> Settings
-          </button>
-          <button
-            onClick={onLogout}
-            title="Log Out"
-            style={{ display: 'flex', alignItems: 'center', gap: 5, background: 'rgba(239, 68, 68, 0.12)', border: '1px solid rgba(239, 68, 68, 0.25)', borderRadius: 3, cursor: 'pointer', color: '#FCA5A5', fontSize: 11, padding: '3px 7px' }}
-          >
-            <LogoutIcon /> Log Out
-          </button>
-        </div>
+        <button
+          onClick={onLogout}
+          title="Log Out"
+          style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, background: 'rgba(239, 68, 68, 0.12)', border: '1px solid rgba(239, 68, 68, 0.25)', borderRadius: 3, cursor: 'pointer', color: '#FCA5A5', fontSize: 11, padding: '6px 7px' }}
+        >
+          <LogoutIcon /> Log Out
+        </button>
       </div>
     </aside>
   )

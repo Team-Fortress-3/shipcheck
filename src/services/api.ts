@@ -1,6 +1,7 @@
 // ─── API Service Layer ────────────────────────────────────────────────────────
 // Connects ShipCheck to the email-extract-compare FastAPI backend
 import { getSupabaseAccessToken } from './supabase'
+import { fmtDate } from '../utils/date'
 
 const API_BASE = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '')
 
@@ -94,7 +95,11 @@ export function mapEmailRecordToGmailEmail(record: any): {
     fromName: record.from_name || record.fromName || '',
     subject: record.subject || '(no subject)',
     snippet: record.snippet || '',
-    date: record.date_str || record.date || '',
+    // Always derived from the numeric timestamp, rendered in a fixed
+    // timezone - not the raw Gmail "Date" header, which carries whatever
+    // timezone offset the original sender's mail client happened to use
+    // (so different emails could show different, confusing raw offsets).
+    date: record.date_str === 'Uploaded' ? 'Uploaded' : fmtDate(record.timestamp || Date.now()),
     timestamp: record.timestamp || Date.now(),
     type: (record.email_type || record.type || 'General') as EmailType,
     status: (record.status || 'Classified') as EmailStatus,
@@ -285,7 +290,7 @@ export async function compareEmailAttachmentsApi(emailId: string, files: File[])
  * Uploads a raw .eml file to be parsed, classified, added to the inbox cache,
  * and (if it's a Document Comparison with 2+ attachments) auto-compared.
  */
-export async function uploadEmlApi(file: File): Promise<any> {
+export async function uploadEmlApi(file: File): Promise<{ record: any; wasDuplicate: boolean }> {
   const formData = new FormData()
   formData.append('file', file)
 
@@ -314,6 +319,120 @@ export async function uploadEmlApi(file: File): Promise<any> {
     throw new Error(`EML upload failed (${res.status}): ${detail}`)
   }
 
+  const wasDuplicate = res.headers.get('X-Eml-Duplicate') === 'true'
+  const record = await res.json()
+  return { record, wasDuplicate }
+}
+
+export interface GmailIntegrationStatus {
+  connected: boolean
+  account_email?: string
+  last_sync_at?: string
+}
+
+/**
+ * Checks whether the shared server-side Gmail connection (one refresh token,
+ * used by the whole team) is configured - not tied to this browser session.
+ */
+export async function getGmailStatusApi(): Promise<GmailIntegrationStatus> {
+  const headers = await getAuthHeaders()
+  const res = await fetch(`${API_BASE}/api/emails/gmail-status`, { headers })
+  if (!res.ok) throw new Error(`Failed to check Gmail status: ${res.status}`)
+  return res.json()
+}
+
+/**
+ * Syncs the latest inbox messages using the backend's shared server-side
+ * Gmail connection (a single team refresh token) instead of this browser's
+ * own OAuth popup login. Classification runs server-side too, so the
+ * returned emails already have real email_type/status - no separate
+ * classify step needed.
+ */
+export async function syncGmailInboxApi(pageToken?: string, maxResults = 25): Promise<{
+  emails: any[]
+  next_page_token?: string
+  synced_count: number
+  new_records: number
+}> {
+  const headers = await getAuthHeaders({ 'Content-Type': 'application/json' })
+  const controller = new AbortController()
+  // Fetches maxResults messages from Gmail then classifies each one server-side
+  // (LLM calls) - scales with batch size, not a flat budget.
+  const timeoutMs = Math.max(45000, maxResults * 4000)
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  let res: Response
+  try {
+    res = await fetch(`${API_BASE}/api/emails/sync`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ page_token: pageToken, max_results: maxResults }),
+      signal: controller.signal,
+    })
+  } catch (err: any) {
+    if (err?.name === 'AbortError') {
+      throw new Error(`Gmail sync timed out after ${Math.round(timeoutMs / 1000)}s.`)
+    }
+    throw new Error('FastAPI backend service is offline. Please verify the backend service is running.')
+  } finally {
+    clearTimeout(timer)
+  }
+  if (!res.ok) {
+    const detail = await extractErrorDetail(res)
+    throw new Error(`Gmail sync failed (${res.status}): ${detail}`)
+  }
+  return res.json()
+}
+
+/**
+ * Lists an email's real attachment filenames (no bytes) via the backend's
+ * shared Gmail connection - for uploaded .eml emails, returns [].
+ */
+export async function getEmailAttachmentsApi(emailId: string): Promise<string[]> {
+  const headers = await getAuthHeaders()
+  const res = await fetch(`${API_BASE}/api/emails/${emailId}/attachments`, { headers })
+  if (!res.ok) throw new Error(`Failed to list attachments: ${res.status}`)
+  const data = await res.json()
+  return data.filenames || []
+}
+
+/**
+ * Direct download URL for one of an email's Gmail attachments (fetched
+ * server-side via the shared connection) - usable as a plain <a href>.
+ */
+export function getAttachmentDownloadUrl(emailId: string, filename: string): string {
+  return `${API_BASE}/api/emails/${encodeURIComponent(emailId)}/attachments/${encodeURIComponent(filename)}/download`
+}
+
+/**
+ * Auto-compares an email's attachments using the backend's shared Gmail
+ * connection to fetch them, rather than this browser's own token.
+ */
+export async function compareEmailFromGmailApi(emailId: string): Promise<CompareResponse> {
+  const headers = await getAuthHeaders()
+  const controller = new AbortController()
+  // Fetches the message + attachments from Gmail, then runs 2 concurrent
+  // Claude extraction calls (vision fallback for scanned docs can be slow).
+  const timeoutMs = 90000
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  let res: Response
+  try {
+    res = await fetch(`${API_BASE}/api/emails/${emailId}/compare-from-gmail`, {
+      method: 'POST',
+      headers,
+      signal: controller.signal,
+    })
+  } catch (err: any) {
+    if (err?.name === 'AbortError') {
+      throw new Error(`Comparison timed out after ${Math.round(timeoutMs / 1000)}s.`)
+    }
+    throw new Error('FastAPI backend service is offline. Please verify the backend service is running.')
+  } finally {
+    clearTimeout(timer)
+  }
+  if (!res.ok) {
+    const detail = await extractErrorDetail(res)
+    throw new Error(`Comparison failed (${res.status}): ${detail}`)
+  }
   return res.json()
 }
 

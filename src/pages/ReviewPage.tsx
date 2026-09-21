@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import {
   surface,
   white,
@@ -10,7 +11,7 @@ import {
   amberBg,
   amberBdr,
 } from '../constants/tokens'
-import { SectionLabel, ReviewSkeleton } from '../components/primitives'
+import { SectionLabel, ReviewSkeleton, SearchInput } from '../components/primitives'
 import type { GmailEmail } from '../types'
 
 interface ReviewPageProps {
@@ -20,21 +21,35 @@ interface ReviewPageProps {
 }
 
 export function ReviewPage({ emails, onSelect, loading }: ReviewPageProps) {
+  const [search, setSearch] = useState('')
+
   if (loading && emails.length === 0) {
     return <ReviewSkeleton />
   }
 
-  const reviewItems = emails.filter(e => e.status === 'Needs Review')
+  const allReviewItems = emails.filter(e => e.status === 'Needs Review')
+  const reviewItems = search
+    ? allReviewItems.filter(e =>
+        e.subject.toLowerCase().includes(search.toLowerCase()) ||
+        e.fromName.toLowerCase().includes(search.toLowerCase()) ||
+        e.from.toLowerCase().includes(search.toLowerCase())
+      )
+    : allReviewItems
 
   return (
     <div style={{ padding: 28 }}>
       <SectionLabel>Human Review Queue</SectionLabel>
 
-      {reviewItems.length > 0 && (
+      {allReviewItems.length > 0 && (
         <div style={{ border: `1px solid ${amberBdr}`, borderRadius: 4, background: amberBg, padding: '10px 16px', marginBottom: 20, fontSize: 12, color: '#92400E' }}>
-          ⚠ {reviewItems.length} {reviewItems.length === 1 ? 'case requires' : 'cases require'} manual review and resolution.
+          ⚠ {allReviewItems.length} {allReviewItems.length === 1 ? 'case requires' : 'cases require'} manual review and resolution.
         </div>
       )}
+
+      <div style={{ display: 'flex', gap: 10, marginBottom: 20, alignItems: 'center' }}>
+        <SearchInput value={search} onChange={setSearch} placeholder="Search review queue…" />
+        <div style={{ marginLeft: 'auto', fontSize: 12, color: faint }}>{reviewItems.length} case{reviewItems.length !== 1 ? 's' : ''}</div>
+      </div>
 
       <div style={{ border: `1px solid ${border}`, borderRadius: 4, overflow: 'hidden', background: white }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
@@ -65,7 +80,7 @@ export function ReviewPage({ emails, onSelect, loading }: ReviewPageProps) {
             ) : (
               <tr>
                 <td colSpan={4} style={{ padding: '48px 20px', textAlign: 'center', color: muted, fontSize: 13 }}>
-                  ✓ All clear. No documents or emails currently require human review.
+                  {search ? 'No review cases match your search.' : '✓ All clear. No documents or emails currently require human review.'}
                 </td>
               </tr>
             )}

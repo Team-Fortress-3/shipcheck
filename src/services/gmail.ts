@@ -1,4 +1,5 @@
 import type { GmailEmail, EmailType, EmailStatus, UserInfo, AttachmentRef } from '../types'
+import { fmtDate } from '../utils/date'
 
 export async function delay(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms))
@@ -92,14 +93,6 @@ export function classify(subject: string, snippet: string, body: string): EmailT
   if (t.includes('shipping instruction') && !t.includes('bill of lading')) return 'New SI Request'
   if (t.includes('unsubscribe') || t.includes('promotion') || t.includes('special offer')) return 'Spam'
   return 'General'
-}
-
-export function fmtDate(ts: number) {
-  const d = new Date(ts), now = new Date()
-  if (d.toDateString() === now.toDateString()) return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-  if ((now.getTime() - ts) < 172800000) return 'Yesterday'
-  if ((now.getTime() - ts) < 604800000) return d.toLocaleDateString([], { weekday: 'short' })
-  return d.toLocaleDateString([], { day: 'numeric', month: 'short' })
 }
 
 export function parseFrom(from: string) {

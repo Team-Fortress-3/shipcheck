@@ -25,6 +25,7 @@ interface DashboardPageProps {
   loading?: boolean
   classifying?: ClassifyingState
   apiError?: string | null
+  comparingIds?: Set<string>
 }
 
 export function DashboardPage({
@@ -35,6 +36,7 @@ export function DashboardPage({
   loading,
   classifying,
   apiError,
+  comparingIds,
 }: DashboardPageProps) {
   const hour = new Date().getHours()
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening'
@@ -58,24 +60,31 @@ export function DashboardPage({
           {greeting}, <em style={{ fontStyle: 'italic', color: navy }}>{firstName}.</em>
         </h1>
 
-        {/* Status strip — amber background only on actionable cells */}
+        {/* Status strip — accent color only on actionable cells */}
         <div style={{ display: 'flex', alignItems: 'stretch', gap: 0, border: `1px solid ${border}`, borderRadius: 4, overflow: 'hidden', marginBottom: 18 }}>
-          {[
-            { label: 'Emails', value: emails.length, sub: loading ? 'Fetching…' : 'in inbox', urgent: false, click: () => onNav('inbox') },
-            { label: 'Doc Checks', value: docComps.length, sub: `${docComps.filter(e => e.status === 'Match').length} matched`, urgent: false, click: () => onNav('inbox') },
-            { label: 'Mismatches', value: mismatches.length, sub: mismatches.length ? 'Action required' : 'All clear', urgent: mismatches.length > 0, click: () => onNav('inbox') },
-            { label: 'Needs Review', value: review.length, sub: review.length ? 'Human review' : 'None pending', urgent: review.length > 0, click: () => onNav('review') },
-          ].map((s, i) => (
-            <button
-              key={i}
-              onClick={s.click}
-              style={{ flex: 1, padding: '12px 18px', border: 'none', background: s.urgent ? amberBg : white, cursor: 'pointer', textAlign: 'left', borderLeft: i > 0 ? `1px solid ${s.urgent ? amberBdr : border}` : 'none', borderTop: s.urgent ? `2px solid ${amber}` : '2px solid transparent' }}
-            >
-              <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: s.urgent ? amber : faint, marginBottom: 4 }}>{s.label}</div>
-              <div style={{ fontFamily: 'Playfair Display, serif', fontSize: 28, fontWeight: 700, color: s.urgent ? '#92400E' : navy, lineHeight: 1 }}>{s.value}</div>
-              <div style={{ fontSize: 11, color: s.urgent ? amber : faint, marginTop: 3 }}>{s.sub}</div>
-            </button>
-          ))}
+          {([
+            { label: 'Emails', value: emails.length, sub: loading ? 'Fetching…' : 'in inbox', accent: null, click: () => onNav('inbox') },
+            { label: 'Doc Checks', value: docComps.length, sub: `${docComps.filter(e => e.status === 'Match').length} matched`, accent: null, click: () => onNav('inbox') },
+            { label: 'Mismatches', value: mismatches.length, sub: mismatches.length ? 'Action required' : 'All clear', accent: mismatches.length > 0 ? 'amber' : null, click: () => onNav('inbox') },
+            { label: 'Needs Review', value: review.length, sub: review.length ? 'Human review' : 'None pending', accent: review.length > 0 ? 'red' : null, click: () => onNav('review') },
+          ] as const).map((s, i) => {
+            const bg = s.accent === 'amber' ? amberBg : s.accent === 'red' ? redBg : white
+            const bdr = s.accent === 'amber' ? amberBdr : s.accent === 'red' ? red : border
+            const line = s.accent === 'amber' ? amber : s.accent === 'red' ? red : navy
+            const text = s.accent === 'amber' ? '#92400E' : s.accent === 'red' ? red : navy
+            const label = s.accent === 'amber' ? amber : s.accent === 'red' ? red : faint
+            return (
+              <button
+                key={i}
+                onClick={s.click}
+                style={{ flex: 1, padding: '12px 18px', border: 'none', background: bg, cursor: 'pointer', textAlign: 'left', borderLeft: i > 0 ? `1px solid ${s.accent ? bdr : border}` : 'none', borderTop: s.accent ? `2px solid ${line}` : '2px solid transparent' }}
+              >
+                <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: label, marginBottom: 4 }}>{s.label}</div>
+                <div style={{ fontFamily: 'Playfair Display, serif', fontSize: 28, fontWeight: 700, color: text, lineHeight: 1 }}>{s.value}</div>
+                <div style={{ fontSize: 11, color: label, marginTop: 3 }}>{s.sub}</div>
+              </button>
+            )
+          })}
         </div>
 
         {/* Initial Fetching Banner */}
@@ -148,7 +157,9 @@ export function DashboardPage({
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                       <span style={{ fontSize: 11, color: muted }}>{e.fromName}</span>
-                      {e.status === 'Processing' ? (
+                      {comparingIds?.has(e.id) ? (
+                        <Badge label="Comparing" />
+                      ) : e.status === 'Processing' ? (
                         <Badge label="Processing" />
                       ) : (
                         <>

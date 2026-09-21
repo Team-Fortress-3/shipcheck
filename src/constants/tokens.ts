@@ -24,16 +24,16 @@ export const redBdr = '#FECACA'
 // ─── Breadcrumbs ──────────────────────────────────────────────────────────────
 
 export const CRUMBS: Record<Page, string> = {
-  dashboard: 'ShipCheck Dashboard / Published Continuously',
-  inbox: 'Inbox / Averis ShipCheck',
-  'email-detail': 'Email Detail / Inbox',
-  processing: 'Processing / Document Comparison',
-  comparison: 'Shipment Comparison / SI vs BL',
-  review: 'Human Review / Queue',
-  'review-detail': 'Human Review / Detail',
-  reports: 'Processing History / Reports',
-  upload: 'Upload & Compare / SI vs BL',
-  'upload-comparison': 'Upload Comparison / Result',
-  settings: 'Account & Settings / ShipCheck',
+  dashboard: 'Dashboard',
+  inbox: 'Inbox',
+  'email-detail': 'Email Detail',
+  processing: 'Processing',
+  comparison: 'Comparison',
+  review: 'Review',
+  'review-detail': 'Review Detail',
+  reports: 'Reports',
+  upload: 'Upload & Compare',
+  'upload-comparison': 'Upload Comparison',
+  settings: 'Settings',
 }
 

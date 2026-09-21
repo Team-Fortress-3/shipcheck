@@ -1,8 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import type { Page, GmailEmail, UserInfo, ComparisonField, ClassifyingState } from '../types'
+import { emailTypeLabel } from '../types'
 import { bg, CRUMBS } from '../constants/tokens'
 import { Sidebar } from '../components/layout/Sidebar'
 import { TopBar } from '../components/layout/TopBar'
+import { useToasts, ToastContainer } from '../components/Toast'
 import {
   supabase,
   signOutSupabase,
@@ -12,15 +14,14 @@ import {
 } from '../services/supabase'
 import {
   getCachedEmailsApi,
-  syncEmailBatchProgressive,
-  classifyEmailsBatch,
   syncUserWithBackendApi,
-  compareEmailAttachmentsApi,
+  syncGmailInboxApi,
+  compareEmailFromGmailApi,
   uploadEmlApi,
   getComparisonsApi,
   mapEmailRecordToGmailEmail,
 } from '../services/api'
-import { fetchEmailsPage, fetchMessageAttachments, fetchMessageAttachmentRefs, fetchInBatches, getUserInfo } from '../services/gmail'
+import { fetchInBatches, getUserInfo } from '../services/gmail'
 
 // Pages
 import { LoginPage } from '../pages/LoginPage'
@@ -81,6 +82,7 @@ export default function App() {
   const [apiError, setApiError] = useState<string | null>(null)
   const [loadMoreNotice, setLoadMoreNotice] = useState<string | null>(null)
   const [authChecking, setAuthChecking] = useState(true)
+  const { toasts, pushToast, dismissToast } = useToasts()
 
   // 1. Check for active Supabase cookie session on initial mount
   useEffect(() => {
@@ -126,25 +128,9 @@ export default function App() {
         // Unblock auth checking immediately if a user is found so the skeleton layout renders
         if (activeUser) {
           setAuthChecking(false)
-          // If Gmail was already connected (token restored from sessionStorage,
-          // not just a fresh login), do a full Gmail sync rather than only
-          // reading the cache - otherwise nextPageToken never gets populated
-          // on a page reload and "Load More Emails" has nothing to page from.
-          if (gmailToken) {
-            loadGmailEmails(gmailToken)
-          } else {
-            setLoading(true)
-            try {
-              const cached = await getCachedEmailsApi(500)
-              if (cached && cached.length > 0) {
-                setEmails(cached)
-              }
-            } catch {
-              // Backend offline or no cached records yet
-            } finally {
-              setLoading(false)
-            }
-          }
+          // Any authenticated user can sync the shared inbox now - it goes
+          // through the backend's own Gmail connection, not this browser's.
+          loadGmailEmails()
         } else {
           setAuthChecking(false)
         }
@@ -171,9 +157,9 @@ export default function App() {
   // no-op.
   const [compareErrors, setCompareErrors] = useState<Record<string, string>>({})
 
-  // Fetches an email's Gmail attachments (looking them up fresh if this
-  // GmailEmail object doesn't already carry them, e.g. it came from the
-  // backend cache rather than a live Gmail page fetch) and runs the compare
+  // Fetches an email's Gmail attachments via the backend's shared server-side
+  // Gmail connection (not this browser's own token - every team member can
+  // trigger this regardless of who's logged in) and runs the compare
   // pipeline against them. Used both as the automatic post-classify trigger
   // and as the manual "Compare Now" retry button.
   const compareEmailNow = useCallback(async (email: GmailEmail) => {
@@ -182,28 +168,27 @@ export default function App() {
       const { [email.id]: _drop, ...rest } = prev
       return rest
     })
-    if (!gmailToken) {
-      const msg = 'Gmail is not connected in this session. Reconnect it in Settings to fetch this email\'s attachments.'
-      setApiError(msg)
-      setCompareErrors(prev => ({ ...prev, [email.id]: msg }))
+    if (email.id.startsWith('eml_')) {
+      // Uploaded directly (not synced from Gmail) - already compared server-side at upload time if possible.
       return null
     }
     setComparingIds(prev => new Set(prev).add(email.id))
     try {
-      let refs = email.attachmentRefs
-      if (!refs || !refs.length) {
-        refs = await fetchMessageAttachmentRefs(gmailToken, email.id)
-      }
-      const files = refs.length ? await fetchMessageAttachments(gmailToken, email.id, refs) : []
-      const result = await compareEmailAttachmentsApi(email.id, files)
+      const result = await compareEmailFromGmailApi(email.id)
       setEmails(prev => prev.map(e => (
-        e.id === email.id ? { ...e, status: result.status, fields: result.fields, comparisonId: result.comparison_id, attachmentRefs: refs } : e
+        e.id === email.id ? { ...e, status: result.status, fields: result.fields, comparisonId: result.comparison_id } : e
       )))
       return result
     } catch (err: any) {
       console.warn(`Compare failed for email ${email.id}:`, err)
-      const msg = err.message || String(err)
-      setApiError(`Comparison failed for "${email.subject.slice(0, 40)}": ${msg}`)
+      // A client-side timeout doesn't mean the comparison failed - the
+      // backend keeps extracting/comparing regardless of whether this
+      // request gave up waiting, so it likely finished; check back shortly.
+      const isTimeout = /timed out/i.test(err.message || '')
+      const msg = isTimeout
+        ? "This is taking a while - it's likely still finishing on the server. Check back in a moment or try again."
+        : (err.message || String(err))
+      setApiError(`Comparison for "${email.subject.slice(0, 40)}": ${msg}`)
       setCompareErrors(prev => ({ ...prev, [email.id]: msg }))
       return null
     } finally {
@@ -213,79 +198,16 @@ export default function App() {
         return next
       })
     }
-  }, [gmailToken])
-
-  // Progressive synchronization with backend Postgres
-  const syncEmailsWithBackend = useCallback(async (targets: GmailEmail[]) => {
-    if (!targets.length) return
-    setClassifying({ active: true, current: 0, total: targets.length, error: null })
-    setApiError(null)
-
-    // Mark targets in state with status 'Processing' so user sees real-time indicators
-    setEmails(prev => {
-      const targetIds = new Set(targets.map(t => t.id))
-      return prev.map(e => (targetIds.has(e.id) ? { ...e, status: 'Processing' } : e))
-    })
-
-    try {
-      await syncEmailBatchProgressive(
-        targets,
-        (syncedItem, originalItem) => {
-          setClassifying(prev => ({ ...prev, current: prev.current + 1 }))
-          // Keep the attachmentRefs captured during the Gmail page fetch -
-          // the backend's EmailRecord doesn't store them, so syncedItem alone
-          // would lose them. The auto-compare backlog sweeper (below) picks
-          // this email up and runs the comparison once it lands in state.
-          const merged = { ...syncedItem, attachmentRefs: originalItem.attachmentRefs }
-          setEmails(prev => {
-            const exists = prev.some(e => e.id === merged.id)
-            if (exists) {
-              return prev.map(e => (e.id === merged.id ? merged : e))
-            } else {
-              return [...prev, merged]
-            }
-          })
-        },
-        (error, originalItem) => {
-          // A client-side timeout on this request doesn't mean classification
-          // actually failed - the backend keeps running the batch in its
-          // thread pool regardless of whether this fetch gave up waiting, so
-          // it typically completes and persists anyway. Don't alarm the user
-          // over something that's very likely to resolve itself; just log it.
-          const isTimeout = /timed out/i.test(error.message)
-          console.warn(`Sync ${isTimeout ? 'timed out (likely still completing server-side)' : 'failed'} for email ${originalItem.id}:`, error)
-          setClassifying(prev => ({
-            ...prev,
-            current: prev.current + 1,
-            error: isTimeout ? prev.error : `Backend error on "${originalItem.subject.slice(0, 32)}…": ${error.message}`,
-          }))
-          if (!isTimeout) {
-            setApiError(`Backend error on "${originalItem.subject.slice(0, 32)}…": ${error.message}`)
-          }
-          // Revert status so item isn't stuck in 'Processing'
-          setEmails(prev => prev.map(e => e.id === originalItem.id ? { ...e, status: e.status === 'Processing' ? 'New' : e.status } : e))
-        },
-        4,
-        5
-      )
-      setClassifying(prev => ({ ...prev, active: false }))
-    } catch (err: any) {
-      console.error('Batch sync failed:', err)
-      const msg = `Backend Sync Failed: ${err.message || String(err)}`
-      setClassifying(prev => ({ ...prev, active: false, error: msg }))
-      setApiError(msg)
-    }
   }, [])
 
   // Sweeps the full email list for any Document Comparison email still
-  // sitting at "New" - whether it just got classified, came back from the
-  // cache on initial load, or was uploaded as .eml - and auto-compares it.
-  // Runs once per email id (tracked in a ref, not state, so it doesn't
-  // itself retrigger this effect) so a failed attempt doesn't loop forever;
-  // the "Compare Now" button on EmailDetailPage covers manual retry.
+  // sitting at "New" - whether it just synced, came back from the cache on
+  // initial load, or was uploaded as .eml - and auto-compares it. Runs once
+  // per email id (tracked in a ref, not state, so it doesn't itself
+  // retrigger this effect) so a failed attempt doesn't loop forever; the
+  // "Compare Now" button on EmailDetailPage covers manual retry.
   const autoCompareAttempted = useRef<Set<string>>(new Set())
   useEffect(() => {
-    if (!gmailToken) return
     const candidates = emails.filter(e =>
       e.type === 'Document Comparison' &&
       e.status === 'New' &&
@@ -296,17 +218,21 @@ export default function App() {
     if (!candidates.length) return
     candidates.forEach(e => autoCompareAttempted.current.add(e.id))
     fetchInBatches(candidates, compareEmailNow, 8)
-  }, [emails, gmailToken, compareEmailNow])
+  }, [emails, compareEmailNow])
 
-  // Load Gmail messages (called when Gmail is connected)
-  const loadGmailEmails = useCallback(async (token: string) => {
+  // Loads the shared inbox: instant cache read, then a live sync via the
+  // backend's shared server-side Gmail connection (one team refresh token -
+  // works the same for every team member, regardless of whose browser this
+  // is or whether they've ever personally logged into Gmail here).
+  // Classification happens server-side as part of the sync itself, so the
+  // returned records already have real email_type/status.
+  const loadGmailEmails = useCallback(async (): Promise<{ ok: boolean; newCount: number }> => {
     setLoading(true)
     setApiError(null)
     try {
       // 1. Instant cache retrieval from Supabase Postgres (<100ms)
-      let cached: GmailEmail[] = []
       try {
-        cached = await getCachedEmailsApi(500)
+        const cached = await getCachedEmailsApi(500)
         if (cached && cached.length > 0) {
           setEmails(cached)
           // Unblock UI immediately so the user can interact with their inbox with 0 load time
@@ -316,60 +242,65 @@ export default function App() {
         console.warn('Cache retrieval note:', err)
       }
 
-      // 2. Fetch latest 25 messages from Gmail in the background
-      const res = await fetchEmailsPage(token, undefined, 25)
-      setNextPageToken(res.nextPageToken || null)
-
-      // Identify emails that are NOT yet in the cache/database
-      const knownIds = new Set([...cached.map(e => e.id), ...emailsRef.current.map(e => e.id)])
-      const trulyNew = res.emails.filter(item => !knownIds.has(item.id))
-
-      if (trulyNew.length > 0) {
-        setEmails(prev => {
-          const currentIds = new Set(prev.map(e => e.id))
-          const fresh = trulyNew.filter(item => !currentIds.has(item.id))
-          return [...fresh, ...prev]
-        })
-        syncEmailsWithBackend(trulyNew)
-      }
+      // 2. Live sync of the latest 25 messages via the shared Gmail connection
+      const res = await syncGmailInboxApi(undefined, 25)
+      setNextPageToken(res.next_page_token || null)
+      const synced = res.emails.map(mapEmailRecordToGmailEmail)
+      const prevIds = new Set(emailsRef.current.map(e => e.id))
+      const newCount = synced.filter(e => !prevIds.has(e.id)).length
+      setEmails(prev => {
+        const byId = new Map(prev.map(e => [e.id, e]))
+        for (const e of synced) byId.set(e.id, e)
+        // Newly-seen ids go to the front, everything else keeps its position
+        const fresh = synced.filter(e => !prevIds.has(e.id))
+        return [...fresh, ...prev.map(e => byId.get(e.id)!)]
+      })
+      return { ok: true, newCount }
     } catch (err: any) {
-      setApiError(`Failed to fetch emails: ${err.message || String(err)}`)
+      // A client-side timeout doesn't mean the sync failed - the backend
+      // keeps classifying in its thread pool regardless of whether this
+      // request gave up waiting, so it likely finished; the data just
+      // isn't reflected here yet. Hitting Refresh will pick it up from cache.
+      const isTimeout = /timed out/i.test(err.message || '')
+      setApiError(isTimeout
+        ? `Gmail sync is taking a while - it's likely still finishing on the server. Try Refresh again in a moment.`
+        : `Failed to sync emails: ${err.message || String(err)}`)
+      return { ok: false, newCount: 0 }
     } finally {
       setLoading(false)
     }
-  }, [syncEmailsWithBackend])
+  }, [])
 
-  // Pagination for Gmail emails
+  // Pagination through the shared inbox
   const loadMoreEmails = useCallback(async () => {
-    if (!gmailToken || !nextPageToken || loadingMore) return
+    if (!nextPageToken || loadingMore) return
     setLoadingMore(true)
     setApiError(null)
     setLoadMoreNotice(null)
     try {
-      const res = await fetchEmailsPage(gmailToken, nextPageToken, 25)
-      setNextPageToken(res.nextPageToken || null)
+      const res = await syncGmailInboxApi(nextPageToken, 25)
+      setNextPageToken(res.next_page_token || null)
 
+      const synced = res.emails.map(mapEmailRecordToGmailEmail)
       const existingIds = new Set(emailsRef.current.map(e => e.id))
-      const trulyNew = res.emails.filter(item => !existingIds.has(item.id))
+      const trulyNew = synced.filter(e => !existingIds.has(e.id))
 
       if (trulyNew.length > 0) {
-        setEmails(prev => {
-          const currentIds = new Set(prev.map(e => e.id))
-          const fresh = trulyNew.filter(item => !currentIds.has(item.id))
-          return [...fresh, ...prev]
-        })
-        syncEmailsWithBackend(trulyNew)
-      } else if (!res.nextPageToken) {
+        setEmails(prev => [...trulyNew, ...prev])
+      } else if (!res.next_page_token) {
         setLoadMoreNotice("You've reached the end of your inbox - no more emails to load.")
       } else {
         setLoadMoreNotice('No new emails in that batch (already synced) - the rest of your inbox may still have more.')
       }
     } catch (err: any) {
-      setApiError(`Failed to load more emails: ${err.message || String(err)}`)
+      const isTimeout = /timed out/i.test(err.message || '')
+      setApiError(isTimeout
+        ? `Loading more emails is taking a while - it's likely still finishing on the server. Try again in a moment.`
+        : `Failed to load more emails: ${err.message || String(err)}`)
     } finally {
       setLoadingMore(false)
     }
-  }, [gmailToken, nextPageToken, loadingMore, syncEmailsWithBackend])
+  }, [nextPageToken, loadingMore])
 
   // Handlers
   async function handleGoogleLogin(t: string) {
@@ -404,27 +335,13 @@ export default function App() {
       console.warn('Backend user sync notice:', err)
     }
 
-    loadGmailEmails(t)
+    loadGmailEmails()
   }
 
   function handleSupabaseLogin(userInfo: UserInfo) {
     setUser(userInfo)
     setPage('dashboard')
-    setLoading(true)
-    // Fetch cached emails for this user from Postgres
-    getCachedEmailsApi(500)
-      .then(cached => {
-        if (cached && cached.length > 0) {
-          setEmails(cached)
-        }
-      })
-      .catch(err => {
-        console.error('Failed to load cached emails:', err)
-        setApiError(err.message || 'Failed to load cached emails from backend.')
-      })
-      .finally(() => {
-        setLoading(false)
-      })
+    loadGmailEmails()
   }
 
   async function handleLogout() {
@@ -448,17 +365,42 @@ export default function App() {
     setPage('email-detail')
   }
 
+  // Manual "Refresh" button in the top bar - loadGmailEmails() itself also
+  // runs silently on login/mount, so the toast lives here rather than inside
+  // it (we don't want a popup every time the app loads).
+  async function handleManualRefresh() {
+    const toastId = pushToast('Refreshing inbox…', 'info')
+    const { ok, newCount } = await loadGmailEmails()
+    if (ok) {
+      pushToast(newCount > 0 ? `Inbox refreshed — ${newCount} new email${newCount !== 1 ? 's' : ''}.` : 'Inbox refreshed — no new emails.', 'success', { id: toastId })
+    } else {
+      pushToast('Failed to refresh inbox — see the error banner for details.', 'error', { id: toastId })
+    }
+  }
+
   // Uploads a raw .eml file: backend parses/classifies/auto-compares it,
   // then it's added straight into the inbox list like a synced Gmail message.
+  // A toast tracks the whole lifecycle (uploading -> already-uploaded /
+  // success / failure) since this used to look like it silently did nothing,
+  // especially re-uploading the same file (the backend recognizes it by
+  // content hash and just returns the existing record with no visible change
+  // to the list).
   async function handleUploadEml(file: File) {
+    const toastId = pushToast(`Uploading "${file.name}"…`, 'info')
     try {
-      const created = await uploadEmlApi(file)
-      const mapped = mapEmailRecordToGmailEmail(created)
+      const { record, wasDuplicate } = await uploadEmlApi(file)
+      const mapped = mapEmailRecordToGmailEmail(record)
       setEmails(prev => {
         const exists = prev.some(e => e.id === mapped.id)
         return exists ? prev.map(e => (e.id === mapped.id ? mapped : e)) : [mapped, ...prev]
       })
+      if (wasDuplicate) {
+        pushToast(`"${file.name}" was already uploaded — showing the existing result.`, 'error', { id: toastId, autoDismissMs: 5000 })
+      } else {
+        pushToast(`"${file.name}" uploaded and classified as ${emailTypeLabel(mapped.type)}.`, 'success', { id: toastId })
+      }
     } catch (err: any) {
+      pushToast(`Failed to upload "${file.name}": ${err.message || String(err)}`, 'error', { id: toastId })
       setApiError(`EML upload failed: ${err.message || String(err)}`)
     }
   }
@@ -499,6 +441,11 @@ export default function App() {
   }
 
   const selectedEmail = emails.find(e => e.id === selectedEmailId)
+  const sidebarAccent: 'success' | 'error' | null = toasts.some(t => t.type === 'error')
+    ? 'error'
+    : toasts.some(t => t.type === 'success')
+    ? 'success'
+    : null
 
   return (
     <div className="app-shell" style={{ background: bg }}>
@@ -508,11 +455,12 @@ export default function App() {
         user={user}
         emails={emails}
         onLogout={handleLogout}
+        accent={sidebarAccent}
       />
       <div className="app-main">
         <TopBar
           crumb={CRUMBS[page] || 'ShipCheck Operations'}
-          onRefresh={page === 'inbox' && gmailToken ? () => loadGmailEmails(gmailToken) : undefined}
+          onRefresh={page === 'inbox' ? handleManualRefresh : undefined}
           loading={loading}
           classifying={classifying}
         />
@@ -526,6 +474,7 @@ export default function App() {
               loading={loading}
               classifying={classifying}
               apiError={apiError}
+              comparingIds={comparingIds}
             />
           )}
           {page === 'inbox' && (
@@ -541,6 +490,7 @@ export default function App() {
               loadingMore={loadingMore}
               loadMoreNotice={loadMoreNotice}
               onUploadEml={handleUploadEml}
+              comparingIds={comparingIds}
             />
           )}
           {page === 'email-detail' && selectedEmail && (
@@ -548,7 +498,7 @@ export default function App() {
               email={selectedEmail}
               onBack={() => setPage('inbox')}
               isComparing={comparingIds.has(selectedEmail.id)}
-              gmailConnected={!!gmailToken}
+              gmailConnected={true}
               onGoToSettings={() => setPage('settings')}
               compareError={compareErrors[selectedEmail.id] || null}
               onProcess={async () => {
@@ -617,7 +567,6 @@ export default function App() {
               gmailToken={gmailToken}
               onConnectGmail={t => {
                 setGmailToken(t)
-                loadGmailEmails(t)
               }}
               onDisconnectGmail={() => {
                 setGmailToken(null)
@@ -627,6 +576,7 @@ export default function App() {
           )}
         </main>
       </div>
+      <ToastContainer toasts={toasts} onDismiss={dismissToast} />
     </div>
   )
 }
