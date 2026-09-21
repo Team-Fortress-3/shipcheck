@@ -322,12 +322,14 @@ export default function App() {
       })
       return { ok: true, newCount }
     } catch (err: any) {
-      // Not having Gmail connected is a deliberate, expected state for an
-      // account that hasn't set it up yet - not a backend failure, so it
-      // shouldn't show as a red error banner. InboxPage/Dashboard render
-      // their own calm "Connect Gmail" prompt from gmailStatus instead.
-      const isNotConnected = /gmail is not connected/i.test(err.message || '')
+      // Not having Gmail connected - or having had it expire/get revoked at
+      // Google's end - is a deliberate, expected state to recover from, not
+      // a backend failure, so it shouldn't show as a red error banner.
+      // InboxPage/Dashboard render their own calm "Connect Gmail" prompt
+      // from gmailStatus instead.
+      const isNotConnected = /gmail is not connected|expired or was revoked/i.test(err.message || '')
       if (isNotConnected) {
+        refreshGmailStatus()
         return { ok: false, newCount: 0 }
       }
       // A client-side timeout doesn't mean the sync failed - the backend

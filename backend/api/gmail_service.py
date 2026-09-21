@@ -296,6 +296,27 @@ async def get_valid_access_token(session: Session, user_id: str, force_refresh: 
         if not resp.is_success:
             err_text = resp.text
             logger.error(f"Failed to refresh Google access token: {err_text}")
+            try:
+                err_reason = resp.json().get("error")
+            except Exception:
+                err_reason = None
+            if err_reason == "invalid_grant":
+                # The refresh token itself is dead (expired - common for
+                # unverified/"Testing"-mode OAuth apps, which Google expires
+                # after ~7 days - or manually revoked). No amount of
+                # retrying fixes this; clear the stored connection so this
+                # account correctly shows as "not connected" going forward
+                # instead of repeatedly failing the same way.
+                if record:
+                    session.delete(record)
+                    try:
+                        session.commit()
+                    except Exception:
+                        session.rollback()
+                _MEM_CACHE.pop(user_id, None)
+                raise RuntimeError(
+                    "Gmail connection has expired or was revoked by Google. Reconnect it from Settings."
+                )
             raise RuntimeError(f"Google token refresh failed ({resp.status_code}): {err_text}")
 
         data = resp.json()
