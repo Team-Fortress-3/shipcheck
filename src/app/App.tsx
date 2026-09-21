@@ -160,32 +160,43 @@ export default function App() {
     setLoading(true)
     setApiError(null)
     try {
-      // 1. Instant cache retrieval
+      // 1. Instant cache retrieval from Supabase Postgres (<100ms)
+      let cached: GmailEmail[] = []
       try {
-        const cached = await getCachedEmailsApi(50)
+        cached = await getCachedEmailsApi(100)
         if (cached && cached.length > 0) {
           setEmails(cached)
+          // Unblock UI immediately so the user can interact with their inbox with 0 load time
+          setLoading(false)
         }
-      } catch {}
+      } catch (err) {
+        console.warn('Cache retrieval note:', err)
+      }
 
-      // 2. Fetch latest 25 messages from Gmail
+      // 2. Fetch latest 25 messages from Gmail in the background
       const res = await fetchEmailsPage(token, undefined, 25)
       setNextPageToken(res.nextPageToken || null)
 
-      // Merge newly fetched emails into state immediately
+      // Identify emails that are NOT yet in the cache/database
       setEmails(prev => {
-        const existingMap = new Map(prev.map(e => [e.id, e]))
-        const combined = [...prev]
+        const knownMap = new Map(prev.map(e => [e.id, e]))
+        const trulyNew: GmailEmail[] = []
+
         for (const item of res.emails) {
-          if (!existingMap.has(item.id)) {
-            combined.push(item)
+          if (!knownMap.has(item.id)) {
+            trulyNew.push(item)
           }
         }
-        return combined
-      })
 
-      // 3. Sync to Supabase Postgres cache progressively
-      await syncEmailsWithBackend(res.emails)
+        // If there are truly new emails, sync ONLY those new ones
+        if (trulyNew.length > 0) {
+          const combined = [...trulyNew, ...prev]
+          syncEmailsWithBackend(trulyNew)
+          return combined
+        }
+
+        return prev
+      })
     } catch (err: any) {
       setApiError(`Failed to fetch emails: ${err.message || String(err)}`)
     } finally {
@@ -205,15 +216,18 @@ export default function App() {
       setEmails(prev => {
         const existingMap = new Map(prev.map(e => [e.id, e]))
         const combined = [...prev]
+        const trulyNew: GmailEmail[] = []
         for (const item of res.emails) {
           if (!existingMap.has(item.id)) {
             combined.push(item)
+            trulyNew.push(item)
           }
+        }
+        if (trulyNew.length > 0) {
+          syncEmailsWithBackend(trulyNew)
         }
         return combined
       })
-
-      await syncEmailsWithBackend(res.emails)
     } catch (err: any) {
       setApiError(`Failed to load more emails: ${err.message || String(err)}`)
     } finally {
